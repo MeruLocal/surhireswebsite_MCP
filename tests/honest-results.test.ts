@@ -148,6 +148,11 @@ describe("commercial claims come from the page or carry a date", () => {
     }
   });
 
+  // MAINTENANCE: this test is intentionally time-based. It will start failing
+  // about 90 days after STATUS_VERIFIED_ON (src/tools/company.ts), i.e. from
+  // 2027-01-12. When it does, do NOT loosen the limit: re-check each claim
+  // against Surhires' own pages, then bump STATUS_VERIFIED_ON. Re-verify and
+  // bump it before 2027-01-12.
   test("static status claims are re-verified within 90 days", () => {
     for (const claim of STATUS_CLAIMS) {
       const age = (Date.now() - Date.parse(claim.verified_on)) / 86_400_000;

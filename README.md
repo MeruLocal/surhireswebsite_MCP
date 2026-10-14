@@ -427,6 +427,10 @@ What is unavailable today, and what would unblock it.
 
 ---
 
+## Maintenance
+
+- **Re-verify `STATUS_VERIFIED_ON` before 2027-01-12.** The static API/MCP status claims in `src/tools/company.ts` carry that date, and `tests/honest-results.test.ts` fails once it is more than 90 days old. Re-check each claim against Surhires' own pages, then bump the date; do not relax the test.
+
 ## Scope and good citizenship
 
 Read-only GETs of public pages. No credentials held, no authenticated system touched, no CAPTCHA or access control bypassed, nothing written to Surhires. Requests are capped at 4 concurrent, cached for 15 minutes, retried with backoff, and sent with an identifying User-Agent carrying your contact address. `robots.txt` is honoured in code.
