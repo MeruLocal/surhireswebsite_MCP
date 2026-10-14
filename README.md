@@ -1,6 +1,6 @@
 # surhires-mcp
 
-An MCP server for [Surhires](https://surhires.com/in), a recruitment ATS/CRM operated by Soor LLC.
+The official MCP server for [Surhires](https://surhires.com/in), a recruitment ATS/CRM operated by Soor LLC.
 
 **Read this part first.** Surhires publishes **no API**. This server reads Surhires' public website and nothing else. It cannot search candidates, post jobs, submit applications or read a pipeline, because no authorized interface exists to do so. The analysis behind that claim, and what would change it, is in [Verified integration options](#verified-integration-options).
 
@@ -30,7 +30,7 @@ Checked on **2026-10-13**. Every finding is reproducible with the command shown.
 | `/integrations/zapier` | Zapier app *"in development for Wave 1"*, **"not usable today"**; developer docs publish *"when the app ships"* | `curl -sSL https://surhires.com/integrations/zapier` |
 | Public API docs search | Nothing on the domain | web search |
 
-**Conclusion.** No public REST API, no API-key or OAuth flow, no developer documentation, no shipped MCP server, and the one programmatic surface that exists (`/api/`) is robots-disallowed and undocumented. There is therefore nothing to authenticate against and no endpoint that could be called without inventing it.
+**Conclusion.** No public REST API, no API-key or OAuth flow, no developer documentation, no authenticated MCP surface for tenant data, and the one programmatic surface that exists (`/api/`) is robots-disallowed and undocumented. There is therefore nothing to authenticate against and no endpoint that could be called without inventing it.
 
 **What this server does instead.** It exposes the one surface that is real, public and crawl-permitted: the published website, read through its schema.org structured data. That turns out to be genuinely useful — pricing, feature claims, connector status, competitor positioning and compliance posture are all published — and it is honest about its limits.
 
@@ -200,7 +200,11 @@ Stateless (a fresh server per request, sharing one page cache and outbound conne
 | `/` | GET | Human-readable landing page: scope, endpoints, live tool list |
 | `/health` | GET | Liveness JSON (`/healthz` kept as an alias) |
 | `/version` | GET | `{"name","version","endpoint","transport"}` |
-| `/.well-known/mcp.json` | GET | Discovery document: transport, auth (none), tool list |
+| `/.well-known/mcp.json` | GET | Discovery document: transport, auth (none), tool count (`tools/list` owns the names). Sent with `Access-Control-Allow-Origin: *` |
+
+### Registry manifest
+
+`server.json` describes the remote endpoint for the MCP registry under the DNS-verified namespace `com.surhires/mcp`. It is **not published** from this repository. Its `version` must equal `package.json`'s (the single version source, also used by `serverInfo` and the User-Agent); `npm run check:versions` checks that, and `npm test` runs it.
 
 ### Docker
 
@@ -331,7 +335,7 @@ One live test is a **tripwire**: if the status pages stop saying "planned / in d
 | `could not extract any plan offers` | Pricing page markup changed | `get_page` on `/pricing` to inspect; the extractor needs updating |
 | Everything times out | Network or proxy | `get_server_diagnostics`; raise `SURHIRES_TIMEOUT_MS` |
 | HTTP 429 from Surhires | Too many parallel reads | Lower `SURHIRES_MAX_CONCURRENCY`, raise `SURHIRES_CACHE_TTL_MS` |
-| Results feel stale | Page cache | `get_server_diagnostics` with `clear_cache: true` |
+| Results feel stale | Page cache | Entries expire after `SURHIRES_CACHE_TTL_MS` (15 min); restart the process to drop them sooner |
 | `robots.txt disallows` | You asked for `/api/*` | Working as intended; that surface is off-limits |
 | `only reads surhires.com` | Off-origin URL passed | Pass a site path |
 | Deep search finds nothing | Scan budget | Raise `deep_max_pages`, or pass `section` |
@@ -397,7 +401,7 @@ What is unavailable today, and what would unblock it.
 | Resume parsing via API | Feature exists in-product, no API | A parsing endpoint accepting an upload |
 | Webhooks / event subscriptions | Nothing published | Published webhook docs + signing secret |
 | Zapier-mediated access | App "in development", "not usable today" | Zapier app ships; invite + developer docs |
-| Official MCP server | "Planned, not shipping", "no build under way" | Surhires ships it — then prefer theirs over this |
+| Authenticated (tenant-data) MCP surface | No tenant API | A documented, authenticated API |
 
 ### Access requirements if Surhires does ship an API
 
@@ -425,4 +429,4 @@ What is unavailable today, and what would unblock it.
 
 Read-only GETs of public pages. No credentials held, no authenticated system touched, no CAPTCHA or access control bypassed, nothing written to Surhires. Requests are capped at 4 concurrent, cached for 15 minutes, retried with backoff, and sent with an identifying User-Agent carrying your contact address. `robots.txt` is honoured in code.
 
-Content belongs to Surhires / Soor LLC. This is an unofficial client, not affiliated with or endorsed by Surhires. Treat vendor-authored comparison pages as marketing, and confirm anything commercially load-bearing with Surhires directly.
+Content belongs to Surhires / Soor LLC. This is the official Surhires MCP server for public website content. Treat vendor-authored comparison pages as marketing, and confirm anything commercially load-bearing with Surhires directly.

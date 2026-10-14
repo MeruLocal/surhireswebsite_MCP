@@ -2,7 +2,9 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { asToolResult } from "../utils/errors.js";
 import { limitArg, marketArg, offsetArg, paginate, queryArg, slugArg } from "../utils/validation.js";
+import { ListOutput } from "./schemas.js";
 import {
+  READ_ONLY,
   capDeepPages,
   fetchAll,
   presentPage,
@@ -49,7 +51,8 @@ export function registerCatalogTools(server: McpServer, ctx: ToolContext): void 
           limit: limitArg(50, 100),
           offset: offsetArg,
         },
-        annotations: { readOnlyHint: true, openWorldHint: true },
+        annotations: READ_ONLY,
+        outputSchema: ListOutput,
       },
       asToolResult(async ({ query, detail, market, limit, offset }) => {
         const entries = await ctx.client.sectionPaths(`/${opts.section}`);
@@ -110,7 +113,7 @@ export function registerCatalogTools(server: McpServer, ctx: ToolContext): void 
           ...(budget.capped ? { detail_capped_to: budget.pages } : {}),
           results: detailed,
         };
-      }),
+      }, { structured: true }),
     );
 
     server.registerTool(
@@ -129,7 +132,7 @@ export function registerCatalogTools(server: McpServer, ctx: ToolContext): void 
             .default(10_000)
             .describe("Maximum characters of body text before truncating."),
         },
-        annotations: { readOnlyHint: true, openWorldHint: true },
+        annotations: READ_ONLY,
       },
       asToolResult(async ({ slug, market, max_chars }) => {
         const path = await resolveSlug(ctx, `/${opts.section}`, slug);
@@ -185,7 +188,8 @@ export function registerCatalogTools(server: McpServer, ctx: ToolContext): void 
       description:
         "Lists the free public calculators and generators Surhires hosts: boolean string generator, resume screener, placement fee and ROI calculators, time-to-fill calculator, pay transparency checker, job description analyzer, recruiter email templates. These are web pages, not APIs -- this tool returns their descriptions and paths so a person can open them.",
       inputSchema: { market: marketArg, detail: z.boolean().default(true).describe("Fetch each page for its published description.") },
-      annotations: { readOnlyHint: true, openWorldHint: true },
+      annotations: READ_ONLY,
+      outputSchema: ListOutput,
     },
     asToolResult(async ({ market, detail }) => {
       const entries = await ctx.client.sectionPaths("/tools");
@@ -209,6 +213,6 @@ export function registerCatalogTools(server: McpServer, ctx: ToolContext): void 
         }),
         note: "These are interactive web pages. This server reads their published copy; it cannot run a calculator for you.",
       };
-    }),
+    }, { structured: true }),
   );
 }

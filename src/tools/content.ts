@@ -11,7 +11,9 @@ import {
   slugArg,
   sortArg,
 } from "../utils/validation.js";
+import { ListOutput } from "./schemas.js";
 import {
+  READ_ONLY,
   capDeepPages,
   fetchAll,
   presentPage,
@@ -49,7 +51,8 @@ export function registerContentTools(server: McpServer, ctx: ToolContext): void 
         limit: limitArg(20, 60),
         offset: offsetArg,
       },
-      annotations: { readOnlyHint: true, openWorldHint: true },
+      annotations: READ_ONLY,
+      outputSchema: ListOutput,
     },
     asToolResult(async ({ query, detail, sort, market, limit, offset }) => {
       const entries = await ctx.client.getSitemap("/blog/sitemap.xml");
@@ -117,7 +120,7 @@ export function registerContentTools(server: McpServer, ctx: ToolContext): void 
             ? undefined
             : "Sorted within the returned window only. Raise limit to sort across more posts.",
       };
-    }),
+    }, { structured: true }),
   );
 
   server.registerTool(
@@ -131,7 +134,7 @@ export function registerContentTools(server: McpServer, ctx: ToolContext): void 
         market: marketArg,
         max_chars: z.coerce.number().int().min(200).max(100_000).default(15_000),
       },
-      annotations: { readOnlyHint: true, openWorldHint: true },
+      annotations: READ_ONLY,
     },
     asToolResult(async ({ slug, market, max_chars }) => {
       const path = await resolveSlug(ctx, "/blog", slug);
@@ -163,7 +166,7 @@ export function registerContentTools(server: McpServer, ctx: ToolContext): void 
         limit: limitArg(10, 40),
         offset: offsetArg,
       },
-      annotations: { readOnlyHint: true, openWorldHint: true },
+      annotations: READ_ONLY,
     },
     asToolResult(async ({ query, deep, deep_max_posts, market, limit, offset }) => {
       const entries = (await ctx.client.getSitemap("/blog/sitemap.xml")).filter(
@@ -211,7 +214,8 @@ export function registerContentTools(server: McpServer, ctx: ToolContext): void 
       description:
         "Lists the long-form guides under /resources: ATS buying guides, ATS vs recruitment CRM, migrating off Bullhorn, time-to-fill benchmarks, compliance checklists, recruiter template libraries.",
       inputSchema: { detail: z.boolean().default(true).describe("Fetch each guide for its published title and description."), market: marketArg },
-      annotations: { readOnlyHint: true, openWorldHint: true },
+      annotations: READ_ONLY,
+      outputSchema: ListOutput,
     },
     asToolResult(async ({ detail, market }) => {
       const entries = await ctx.client.sectionPaths("/resources");
@@ -241,7 +245,7 @@ export function registerContentTools(server: McpServer, ctx: ToolContext): void 
           };
         }),
       };
-    }),
+    }, { structured: true }),
   );
 
   server.registerTool(
@@ -251,7 +255,7 @@ export function registerContentTools(server: McpServer, ctx: ToolContext): void 
       description:
         "Reads Surhires' changelog page: its release policy, what each entry records, and how breaking changes are given notice. Be aware the changelog may be empty by design -- Surhires states it records nothing before general availability and backfills nothing, so an empty result is the real answer, not a failure.",
       inputSchema: { market: marketArg, max_chars: z.coerce.number().int().min(200).max(60_000).default(10_000) },
-      annotations: { readOnlyHint: true, openWorldHint: true },
+      annotations: READ_ONLY,
     },
     asToolResult(async ({ market, max_chars }) => {
       const page = await ctx.client.getPage("/changelog", market);
@@ -273,7 +277,7 @@ export function registerContentTools(server: McpServer, ctx: ToolContext): void 
         market: marketArg,
         max_chars: z.coerce.number().int().min(200).max(60_000).default(10_000),
       },
-      annotations: { readOnlyHint: true, openWorldHint: true },
+      annotations: READ_ONLY,
     },
     asToolResult(async ({ page, market, max_chars }) => {
       const wanted = page === "both" ? ["/roadmap", "/whats-shipping"] : [`/${page}`];

@@ -9,7 +9,8 @@ import {
   paginate,
   queryArg,
 } from "../utils/validation.js";
-import { capDeepPages, fetchAll, presentPage, rank, slugOf, type ToolContext } from "./shared.js";
+import { capDeepPages, fetchAll, presentPage, rank, READ_ONLY, slugOf, type ToolContext } from "./shared.js";
+import { ListOutput } from "./schemas.js";
 
 const SECTIONS = [
   "features",
@@ -45,7 +46,8 @@ export function registerPageTools(server: McpServer, ctx: ToolContext, baseUrl: 
         limit: limitArg(100, 500),
         offset: offsetArg,
       },
-      annotations: { readOnlyHint: true, openWorldHint: true },
+      annotations: READ_ONLY,
+      outputSchema: ListOutput,
     },
     asToolResult(async ({ section, contains, limit, offset }) => {
       const index = section
@@ -64,7 +66,7 @@ export function registerPageTools(server: McpServer, ctx: ToolContext, baseUrl: 
         ),
         note: "Paths are unprefixed as published in the sitemap. The server applies the market prefix (e.g. /in) automatically when fetching.",
       };
-    }),
+    }, { structured: true }),
   );
 
   server.registerTool(
@@ -92,7 +94,7 @@ export function registerPageTools(server: McpServer, ctx: ToolContext, baseUrl: 
           .default(false)
           .describe("Also return the internal links found on the page, useful for crawling onward."),
       },
-      annotations: { readOnlyHint: true, openWorldHint: true },
+      annotations: READ_ONLY,
     },
     asToolResult(async ({ path, market, max_chars, include_links }) => {
       const clean = normalisePath(path, baseUrl);
@@ -127,7 +129,7 @@ export function registerPageTools(server: McpServer, ctx: ToolContext, baseUrl: 
         limit: limitArg(10, 50),
         offset: offsetArg,
       },
-      annotations: { readOnlyHint: true, openWorldHint: true },
+      annotations: READ_ONLY,
     },
     asToolResult(async ({ query, section, deep, deep_max_pages, limit, offset }) => {
       const index = section
@@ -202,7 +204,7 @@ export function registerPageTools(server: McpServer, ctx: ToolContext, baseUrl: 
         path: z.string().trim().min(1).describe('Site path, e.g. "/features/resume-parsing".'),
         market: marketArg,
       },
-      annotations: { readOnlyHint: true, openWorldHint: true },
+      annotations: READ_ONLY,
     },
     asToolResult(async ({ path, market }) => {
       const clean = normalisePath(path, baseUrl);

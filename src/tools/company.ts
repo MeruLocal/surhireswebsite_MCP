@@ -3,7 +3,8 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { asToolResult, parseFailure } from "../utils/errors.js";
 import { extractOrganization } from "../clients/extract.js";
 import { marketArg } from "../utils/validation.js";
-import { presentPage, slugOf, type ToolContext } from "./shared.js";
+import { presentPage, READ_ONLY, slugOf, type ToolContext } from "./shared.js";
+import { ListOutput } from "./schemas.js";
 
 /**
  * Company, trust and integration-status tools.
@@ -22,7 +23,7 @@ export function registerCompanyTools(server: McpServer, ctx: ToolContext): void 
       description:
         "Returns the operating company behind Surhires from the site's Organization structured data: legal name, registered address, sales contact point, logo and the areas it serves. Useful for due diligence on who you would be contracting with.",
       inputSchema: { market: marketArg },
-      annotations: { readOnlyHint: true, openWorldHint: true },
+      annotations: READ_ONLY,
     },
     asToolResult(async ({ market }) => {
       const html = await ctx.client.getText("/", market);
@@ -61,12 +62,12 @@ export function registerCompanyTools(server: McpServer, ctx: ToolContext): void 
     {
       title: "Check whether Surhires offers an API, MCP server or Zapier app",
       description:
-        "Reads the pages where Surhires states the status of its programmatic surfaces -- /mcp-server, /whats-shipping and /integrations/zapier -- and returns their current published text plus FAQ entries. Call this before assuming any Surhires API exists: as of this server's last verification, Surhires published no REST API, no API keys, no developer documentation and no MCP server, and described its own MCP server as planned with no build under way.",
+        "Reads the pages where Surhires states the status of its programmatic surfaces -- /mcp-server, /whats-shipping and /integrations/zapier -- and returns their current published text plus FAQ entries. Call this before assuming any Surhires API exists: as of this server's last verification, Surhires published no REST API, API keys or developer docs for tenant data; this server is the official Surhires MCP server for public website content.",
       inputSchema: {
         market: marketArg,
         max_chars: z.coerce.number().int().min(200).max(40_000).default(6_000),
       },
-      annotations: { readOnlyHint: true, openWorldHint: true },
+      annotations: READ_ONLY,
     },
     asToolResult(async ({ market, max_chars }) => {
       const targets = ["/mcp-server", "/whats-shipping", "/integrations/zapier"];
@@ -78,7 +79,7 @@ export function registerCompanyTools(server: McpServer, ctx: ToolContext): void 
           "No public REST API, API key flow, OAuth app or developer documentation was published on surhires.com.",
           "docs.surhires.com, developers.surhires.com and api.surhires.com did not resolve in DNS.",
           "robots.txt disallows /api/ for every user agent, so that surface is not readable here.",
-          "Surhires' own /mcp-server page described its MCP server as planned, not shipping.",
+          "No authenticated MCP surface for tenant data was published; this server is the official Surhires MCP server for public website content.",
           "The Zapier app was described as in development and not usable.",
         ],
         pages: settled.map((result, i) =>
@@ -111,7 +112,7 @@ export function registerCompanyTools(server: McpServer, ctx: ToolContext): void 
           .describe('Integration slug, e.g. "naukri", "indeed", "linkedin-recruiter", "zapier", "slack".'),
         market: marketArg,
       },
-      annotations: { readOnlyHint: true, openWorldHint: true },
+      annotations: READ_ONLY,
     },
     asToolResult(async ({ integration, market }) => {
       const entries = await ctx.client.sectionPaths("/integrations");
@@ -164,7 +165,7 @@ export function registerCompanyTools(server: McpServer, ctx: ToolContext): void 
         market: marketArg,
         max_chars: z.coerce.number().int().min(200).max(60_000).default(8_000),
       },
-      annotations: { readOnlyHint: true, openWorldHint: true },
+      annotations: READ_ONLY,
     },
     asToolResult(async ({ market, max_chars }) => {
       const targets = ["/security", "/trust-center"];
@@ -189,7 +190,8 @@ export function registerCompanyTools(server: McpServer, ctx: ToolContext): void 
       description:
         "Lists the pages under /legal -- terms, privacy, DPA, GDPR, India DPDPA, CCPA, EEO/OFCCP, TCPA/CAN-SPAM, cookies, subprocessors, accessibility. Read any of them in full with get_page.",
       inputSchema: {},
-      annotations: { readOnlyHint: true, openWorldHint: true },
+      annotations: READ_ONLY,
+      outputSchema: ListOutput,
     },
     asToolResult(async () => {
       const entries = await ctx.client.sectionPaths("/legal");
@@ -198,7 +200,7 @@ export function registerCompanyTools(server: McpServer, ctx: ToolContext): void 
         results: entries.map((e) => ({ slug: slugOf(e.path), path: e.path, last_modified: e.last_modified })),
         hint: 'Read one with get_page, e.g. path="/legal/dpdpa".',
       };
-    }),
+    }, { structured: true }),
   );
 
   server.registerTool(
@@ -207,14 +209,10 @@ export function registerCompanyTools(server: McpServer, ctx: ToolContext): void 
       title: "Diagnose this MCP server",
       description:
         "Reports this server's own configuration and connectivity: which origin and market it reads, cache state, and whether surhires.com is reachable right now. Call this first when a tool is failing, to tell a network or configuration problem apart from a page that has genuinely changed.",
-      inputSchema: {
-        clear_cache: z.boolean().default(false).describe("Drop the in-memory page cache before checking."),
-      },
-      annotations: { readOnlyHint: false, idempotentHint: true, openWorldHint: true },
+      inputSchema: {},
+      annotations: READ_ONLY,
     },
-    asToolResult(async ({ clear_cache }) => {
-      if (clear_cache) ctx.client.clearCache();
-
+    asToolResult(async () => {
       let reachable = false;
       let indexed = 0;
       let error: string | undefined;
@@ -228,7 +226,6 @@ export function registerCompanyTools(server: McpServer, ctx: ToolContext): void 
       return {
         default_market: ctx.defaultMarket,
         cache: ctx.client.cacheStats(),
-        cache_cleared: clear_cache,
         surhires_reachable: reachable,
         pages_in_sitemap: indexed,
         ...(error ? { error } : {}),

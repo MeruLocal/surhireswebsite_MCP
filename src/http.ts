@@ -15,7 +15,7 @@
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { buildServer, SERVER_NAME, SERVER_VERSION } from "./server.js";
+import { buildServer, SERVER_NAME, SERVER_VERSION, WEBSITE_URL } from "./server.js";
 import { loadConfig, type Config } from "./config.js";
 import { createLogger } from "./utils/logger.js";
 import { SurhiresClient } from "./clients/surhires-client.js";
@@ -163,9 +163,9 @@ ${content}
 function sendStatusPage(res: ServerResponse, config: Config, names: string[]): void {
 
   const body = renderShell(
-    "Surhires Website Knowledge MCP Server",
+    "Surhires MCP Server",
     `
-<h1>Surhires Website Knowledge MCP Server</h1>
+<h1>Surhires MCP Server</h1>
 
 <p>Read-only Surhires website mirror (product knowledge: pricing, features, integrations,
 comparisons, competitor pages, blog and compliance posture). Connect via the Streamable HTTP
@@ -180,12 +180,11 @@ Tools: <code>POST /mcp</code> &rarr; <code>tools/list</code></p>
 <p class="caution">This is not a customer ATS API. It holds no candidate, client or pipeline
 data, performs no ATS actions, and needs no API key &mdash; never send one here.</p>
 
-<p>Surhires publishes no public API, no API keys and no developer documentation, and
-<code>robots.txt</code> disallows <code>/api/</code> for every user agent. Its own pages
-describe the official Surhires MCP server as planned rather than shipping. This server
-therefore reads the published website only: it cannot search candidates, post or edit jobs,
-submit applications or read a pipeline. Call <code>get_api_and_mcp_status</code> for the live
-wording from Surhires' own pages.</p>
+<p>This is the official Surhires MCP server for public product knowledge. It reads the
+published website only: it cannot search candidates, post or edit jobs, submit applications
+or read a pipeline. Tenant data lives behind a login at <code>app.surhires.com</code>, no public
+API for it is published, and <code>robots.txt</code> disallows <code>/api/</code> for every user
+agent. Call <code>get_api_and_mcp_status</code> for the live wording from Surhires' own pages.</p>
 
 <p>Reading <strong>${escapeHtml(config.baseUrl)}</strong> for the
 <strong>${escapeHtml(config.market)}</strong> market, with ${names.length} tools registered.</p>
@@ -202,8 +201,7 @@ wording from Surhires' own pages.</p>
 <hr/>
 <p class="meta">You are seeing this page because a browser sends <code>GET</code>. The protocol
 endpoint speaks JSON-RPC over <code>POST</code> and answers <code>405</code> to anything else
-&mdash; expected, not a fault. Content belongs to Surhires / Soor LLC; this is an unofficial
-client, not affiliated with or endorsed by Surhires.</p>
+&mdash; expected, not a fault. Content belongs to Surhires / Soor LLC.</p>
 `,
   );
 
@@ -260,21 +258,31 @@ async function main(): Promise<void> {
       // Discovery document, so a client can learn the endpoint and tool list
       // without a round trip through the protocol.
       if (url.pathname === "/.well-known/mcp.json") {
-        sendJson(res, 200, {
-          name: SERVER_NAME,
-          version: SERVER_VERSION,
-          description:
-            "Read-only MCP server over the public Surhires website: pricing, features, integrations, competitor comparisons, blog and compliance posture. Holds no credentials and performs no ATS actions.",
-          transport: {
-            type: "streamable-http",
-            url: config.publicBaseUrl ? `${config.publicBaseUrl}/mcp` : "/mcp",
-            methods: ["POST"],
+        // tools/list is the one source of tool names; the manifest only counts
+        // them. Readable cross-origin so browser-based inspectors can fetch it.
+        sendJson(
+          res,
+          200,
+          {
+            name: SERVER_NAME,
+            version: SERVER_VERSION,
+            websiteUrl: WEBSITE_URL,
+            description:
+              "Official Surhires MCP server: read-only access to the public Surhires website (pricing, features, integrations, competitor comparisons, blog and compliance posture). Holds no credentials and performs no ATS actions.",
+            transport: {
+              type: "streamable-http",
+              url: config.publicBaseUrl ? `${config.publicBaseUrl}/mcp` : "/mcp",
+              methods: ["POST"],
+            },
+            authentication: { required: false, note: "No API key is required and none should be sent." },
+            // The tool set is fixed at build and this transport is stateless, so
+            // no list-changed notification is ever sent.
+            capabilities: { tools: {} },
+            tool_count: toolNames.length,
+            documentation: "/",
           },
-          authentication: { required: false, note: "No API key is required and none should be sent." },
-          capabilities: { tools: { listChanged: true } },
-          tools: toolNames,
-          documentation: "/",
-        });
+          { "access-control-allow-origin": "*" },
+        );
         return;
       }
 

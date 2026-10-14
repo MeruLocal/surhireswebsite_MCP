@@ -2,7 +2,8 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { asToolResult, parseFailure } from "../utils/errors.js";
 import { limitArg, marketArg, offsetArg, paginate, slugArg } from "../utils/validation.js";
-import { presentPage, resolveSlug, slugOf, toListing, type ToolContext } from "./shared.js";
+import { presentPage, READ_ONLY, resolveSlug, slugOf, toListing, type ToolContext } from "./shared.js";
+import { ComparePricingOutput, CompetitorOutput, ListOutput, PricingOutput } from "./schemas.js";
 
 /**
  * Pricing and competitor-comparison tools.
@@ -28,7 +29,8 @@ export function registerPricingTools(server: McpServer, ctx: ToolContext): void 
           .describe("Also return the pricing page prose, which covers what is and is not included."),
         max_chars: z.coerce.number().int().min(200).max(60_000).default(6_000),
       },
-      annotations: { readOnlyHint: true, openWorldHint: true },
+      annotations: READ_ONLY,
+      outputSchema: PricingOutput,
     },
     asToolResult(async ({ market, include_page_text, max_chars }) => {
       const page = await ctx.client.getPage("/pricing", market);
@@ -48,6 +50,7 @@ export function registerPricingTools(server: McpServer, ctx: ToolContext): void 
         ...(include_page_text
           ? { page: presentPage(page, { maxChars: max_chars, includeFaqs: false }) }
           : {}),
+        // Static text, not read from the page: these sentences are fixed in code.
         caveats: [
           "Prices are per recruiter seat per month and exclude indirect tax.",
           "The pricing page describes these figures as provisional.",
@@ -56,7 +59,7 @@ export function registerPricingTools(server: McpServer, ctx: ToolContext): void 
         ],
         date_modified: page.date_modified,
       };
-    }),
+    }, { structured: true }),
   );
 
   server.registerTool(
@@ -73,7 +76,8 @@ export function registerPricingTools(server: McpServer, ctx: ToolContext): void 
           .default(["in", "us", "gb", "au"])
           .describe("Markets to compare."),
       },
-      annotations: { readOnlyHint: true, openWorldHint: true },
+      annotations: READ_ONLY,
+      outputSchema: ComparePricingOutput,
     },
     asToolResult(async ({ markets }) => {
       const settled = await Promise.allSettled(
@@ -107,7 +111,7 @@ export function registerPricingTools(server: McpServer, ctx: ToolContext): void 
         by_market,
         note: "Each market is priced in its own currency with no conversion applied. Surhires labels all of these figures provisional.",
       };
-    }),
+    }, { structured: true }),
   );
 
   server.registerTool(
@@ -117,7 +121,8 @@ export function registerPricingTools(server: McpServer, ctx: ToolContext): void 
       description:
         "Lists the competitors Surhires publishes a head-to-head comparison page against -- Bullhorn, Greenhouse, Lever, Ceipal, Loxo, Manatal, Recruit CRM, Recruiterflow, Vincere, Zoho Recruit, JobAdder, Crelate, Tracker RMS. Also lists the 'alternatives to' pages where they exist.",
       inputSchema: { limit: limitArg(50, 100), offset: offsetArg },
-      annotations: { readOnlyHint: true, openWorldHint: true },
+      annotations: READ_ONLY,
+      outputSchema: ListOutput,
     },
     asToolResult(async ({ limit, offset }) => {
       const comparisons = (await ctx.client.sectionPaths("/vs")).map(toListing);
@@ -131,7 +136,7 @@ export function registerPricingTools(server: McpServer, ctx: ToolContext): void 
         alternatives_pages: alternatives,
         note: "Surhires writes these pages itself, so they are a vendor's own framing of a competitor. Each page's FAQ states when the competitor's pricing was last verified.",
       };
-    }),
+    }, { structured: true }),
   );
 
   server.registerTool(
@@ -145,7 +150,8 @@ export function registerPricingTools(server: McpServer, ctx: ToolContext): void 
         market: marketArg,
         max_chars: z.coerce.number().int().min(200).max(100_000).default(12_000),
       },
-      annotations: { readOnlyHint: true, openWorldHint: true },
+      annotations: READ_ONLY,
+      outputSchema: CompetitorOutput,
     },
     asToolResult(async ({ competitor, market, max_chars }) => {
       const path = await resolveSlug(ctx, "/vs", competitor);
@@ -156,6 +162,6 @@ export function registerPricingTools(server: McpServer, ctx: ToolContext): void 
         bias_note:
           "Authored by Surhires about a competitor. Verify any competitor pricing or packaging claim against that vendor's own site before relying on it.",
       };
-    }),
+    }, { structured: true }),
   );
 }

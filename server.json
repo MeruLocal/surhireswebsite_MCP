@@ -1,0 +1,15 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "com.surhires/mcp",
+  "title": "Surhires",
+  "description": "Official Surhires MCP server: read-only public product knowledge (pricing, features, integrations).",
+  "status": "active",
+  "version": "0.1.0",
+  "websiteUrl": "https://surhires.com",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://mcp.surhires.com/mcp"
+    }
+  ]
+}

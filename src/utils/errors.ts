@@ -112,14 +112,33 @@ export const parseFailure = (path: string, what: string) =>
     "The page markup may have changed. Call get_page on the same path to see the raw structured extraction.",
   );
 
-/** Wraps a tool handler so every thrown error becomes a clean MCP error result. */
+export interface ToolResult {
+  [key: string]: unknown;
+  content: { type: "text"; text: string }[];
+  structuredContent?: Record<string, unknown>;
+  isError?: boolean;
+}
+
+/**
+ * Wraps a tool handler so every thrown error becomes a clean MCP error result.
+ *
+ * With `structured: true` (for tools that declare an outputSchema) the value is
+ * also returned as `structuredContent`, next to the same JSON as text for
+ * clients that only read text. Errors never carry structuredContent; the SDK
+ * skips output validation when isError is set.
+ */
 export function asToolResult<A>(
   handler: (args: A) => Promise<unknown>,
-): (args: A) => Promise<{ content: { type: "text"; text: string }[]; isError?: boolean }> {
+  opts: { structured?: boolean } = {},
+): (args: A) => Promise<ToolResult> {
   return async (args: A) => {
     try {
       const value = await handler(args);
-      return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
+      const text = JSON.stringify(value, null, 2);
+      return {
+        content: [{ type: "text" as const, text }],
+        ...(opts.structured ? { structuredContent: JSON.parse(text) as Record<string, unknown> } : {}),
+      };
     } catch (error) {
       if (error instanceof SurhiresError) {
         return { content: [{ type: "text" as const, text: error.toText() }], isError: true };
