@@ -25,6 +25,10 @@ export const SHIPPED = [
   ".env.example",
   "claude_desktop_config.example.json",
   "LICENSE",
+  "docs",
+  "tests",
+  "scripts",
+  ".github",
 ];
 
 function walk(path, out) {

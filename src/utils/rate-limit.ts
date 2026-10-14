@@ -44,21 +44,23 @@ export class RateLimiter {
 }
 
 /**
- * The key a request is limited under. Without a trusted proxy this is the
- * socket address. With one, it is the right-most X-Forwarded-For hop: the
- * address our own proxy appended, which a client cannot forge (anything the
- * client sends sits to its left).
+ * The key a request is limited under. With `trustedHops` = 0 this is the
+ * socket address. With N trusted proxy hops it is the Nth X-Forwarded-For
+ * entry counting from the right (each trusted proxy appended one entry, and
+ * anything a client sends sits further left, so it cannot be forged). When the
+ * header has fewer than N entries it falls back to the socket address.
+ * CF-Connecting-IP is deliberately not trusted.
  */
 export function clientKey(
   req: Pick<IncomingMessage, "headers"> & { socket: { remoteAddress?: string } },
-  trustProxy: boolean,
+  trustedHops: number,
 ): string {
-  if (trustProxy) {
+  if (trustedHops > 0) {
     const raw = req.headers["x-forwarded-for"];
     const header = Array.isArray(raw) ? raw.join(",") : raw;
     const hops = (header ?? "").split(",").map((h) => h.trim()).filter(Boolean);
-    const last = hops[hops.length - 1];
-    if (last) return last;
+    const picked = hops[hops.length - trustedHops];
+    if (hops.length >= trustedHops && picked) return picked;
   }
   return req.socket.remoteAddress ?? "unknown";
 }

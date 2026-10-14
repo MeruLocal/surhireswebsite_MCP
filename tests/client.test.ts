@@ -347,6 +347,37 @@ describe("outbound body cap", () => {
     );
   });
 
+  test("a stream larger than the cap fails before it is fully read", async () => {
+    let pulled = 0;
+    let cancelled = false;
+    const chunk = new Uint8Array(1024).fill(120);
+    const total = 100; // 100 KiB on offer, cap is 2 KiB
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (pulled >= total) return controller.close();
+        pulled += 1;
+        controller.enqueue(chunk);
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const fetch = async () => ({
+      ok: true,
+      status: 200,
+      text: async () => "unused",
+      headers: { get: () => null },
+      body: stream as never,
+    });
+    const client = new SurhiresClient(config({ SURHIRES_MAX_PAGE_BYTES: "2048", SURHIRES_MAX_RETRIES: "0" }), silent, fetch);
+    await assert.rejects(
+      () => client.getText("/pricing"),
+      (error: unknown) => error instanceof SurhiresError && /too large/.test(error.message),
+    );
+    assert.ok(pulled < total, `read ${pulled} of ${total} chunks`);
+    assert.ok(cancelled, "the stream was cancelled");
+  });
+
   test("reads a streamed body under the cap", async () => {
     const encoder = new TextEncoder();
     const fetch = async () => ({
