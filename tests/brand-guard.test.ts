@@ -28,7 +28,9 @@ function tempCopy(): string {
 
 describe("check-brands guard", () => {
   test("passes on the repository with a fake forbidden list", () => {
-    const r = run(repo, "acme-holdings-example,examplecorp-group");
+    // Assembled at runtime so this file (now itself scanned) never contains the names.
+    const names = [["no", "such", "name", "one"].join("-"), ["no", "such", "name", "two"].join("-")];
+    const r = run(repo, names.join(","));
     assert.equal(r.status, 0, r.stderr);
   });
 

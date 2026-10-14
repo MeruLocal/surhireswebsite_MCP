@@ -126,8 +126,7 @@ ${content}
  * Not part of the MCP protocol -- it exists so a GET does not look like a failure,
  * and so the scope of this server is stated plainly to whoever lands on it.
  */
-function sendStatusPage(res: ServerResponse, config: Config, client: SurhiresClient): void {
-  const names = listToolNames(config, client);
+function sendStatusPage(res: ServerResponse, config: Config, names: string[]): void {
 
   const body = renderShell(
     "Surhires MCP Server",
@@ -184,6 +183,9 @@ async function main(): Promise<void> {
   // One client for the life of the process: its page cache, request
   // coalescing and outbound concurrency limit then work across requests.
   const client = new SurhiresClient(config, log);
+  // Built once: the tool set is fixed for the life of the process, so GET / and
+  // the discovery document must not construct a server per request.
+  const toolNames = listToolNames(config, client);
   const limiter = new RateLimiter(config.rateLimitPerMin);
   const origins = allowedOrigins(config);
   const anyOrigin = config.allowedOrigins.includes("*");
@@ -205,7 +207,7 @@ async function main(): Promise<void> {
       }
 
       if (url.pathname === "/" && req.method === "GET") {
-        sendStatusPage(res, config, client);
+        sendStatusPage(res, config, toolNames);
         return;
       }
 
@@ -242,7 +244,7 @@ async function main(): Promise<void> {
             // The tool set is fixed at build and this transport is stateless, so
             // no list-changed notification is ever sent.
             capabilities: { tools: {}, resources: {}, prompts: {} },
-            tool_count: listToolNames(config, client).length,
+            tool_count: toolNames.length,
             documentation: "/",
           },
           { "access-control-allow-origin": "*" },
@@ -261,7 +263,7 @@ async function main(): Promise<void> {
         // stateless and has no standalone stream to attach to. A browser, which
         // asks for HTML, gets a readable status page instead of a bare error.
         if (req.method === "GET" && accept.includes("text/html")) {
-          sendStatusPage(res, config, client);
+          sendStatusPage(res, config, toolNames);
           return;
         }
         res.writeHead(405, { allow: "POST", "content-type": "application/json" });
