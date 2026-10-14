@@ -1,6 +1,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { RateLimiter, clientKey } from "../dist/utils/rate-limit.js";
+import { loadConfig } from "../dist/config.js";
 
 describe("RateLimiter", () => {
   test("the 61st hit in a window waits, and a new window resets", () => {
@@ -35,15 +36,44 @@ describe("clientKey", () => {
     socket: { remoteAddress: "10.0.0.1" },
   });
 
-  test("uses the socket address without TRUST_PROXY, ignoring X-Forwarded-For", () => {
-    assert.equal(clientKey(req("203.0.113.9"), false), "10.0.0.1");
+  test("0 hops uses the socket address, ignoring X-Forwarded-For", () => {
+    assert.equal(clientKey(req("203.0.113.9"), 0), "10.0.0.1");
   });
 
-  test("uses the right-most X-Forwarded-For hop with TRUST_PROXY", () => {
-    assert.equal(clientKey(req("198.51.100.7, 203.0.113.9"), true), "203.0.113.9");
+  test("1 hop uses the right-most X-Forwarded-For entry", () => {
+    assert.equal(clientKey(req("198.51.100.7, 203.0.113.9"), 1), "203.0.113.9");
+  });
+
+  test("2 hops skip the proxy's own entry (Cloudflare then Apache)", () => {
+    // client-sent forged entry, real client, Cloudflare edge address
+    assert.equal(clientKey(req("192.0.2.66, 198.51.100.7, 203.0.113.9"), 2), "198.51.100.7");
+  });
+
+  test("a header shorter than the hop count falls back to the socket", () => {
+    assert.equal(clientKey(req("203.0.113.9"), 2), "10.0.0.1");
   });
 
   test("falls back to the socket when the header is absent", () => {
-    assert.equal(clientKey(req(), true), "10.0.0.1");
+    assert.equal(clientKey(req(), 1), "10.0.0.1");
+  });
+
+  test("CF-Connecting-IP is not trusted", () => {
+    const r = { headers: { "cf-connecting-ip": "192.0.2.1" }, socket: { remoteAddress: "10.0.0.1" } };
+    assert.equal(clientKey(r, 1), "10.0.0.1");
+  });
+});
+
+describe("TRUST_PROXY parsing", () => {
+  const hops = (v?: string) =>
+    loadConfig({ SURHIRES_BASE_URL: "https://surhires.com", ...(v === undefined ? {} : { TRUST_PROXY: v }) } as NodeJS.ProcessEnv)
+      .trustProxy;
+
+  test("unset and 0 mean 0; legacy true/1 mean 1; N means N", () => {
+    assert.equal(hops(), 0);
+    assert.equal(hops("0"), 0);
+    assert.equal(hops("1"), 1);
+    assert.equal(hops("true"), 1);
+    assert.equal(hops("2"), 2);
+    assert.equal(hops("junk"), 0);
   });
 });

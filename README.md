@@ -126,7 +126,7 @@ cp .env.example .env
 | `LOG_LEVEL` | `info` | `error` \| `warn` \| `info` \| `debug` (stderr only) |
 | `PORT` / `MCP_HTTP_HOST` | `3000` / `127.0.0.1` | HTTP transport only |
 | `MCP_RATE_LIMIT_PER_MIN` | `60` | HTTP only: `POST /mcp` requests per minute per client (`0` disables); over it, `429` with `Retry-After` |
-| `TRUST_PROXY` | unset | HTTP only: set `1` behind your own reverse proxy so the rate limit keys on the right-most `X-Forwarded-For` hop. Leave unset when nothing sits in front, or a caller can choose its own key |
+| `TRUST_PROXY` | unset (`0`) | HTTP only: the number of trusted reverse-proxy hops in front of this server. `0` keys the rate limit on the socket address; `N` keys on the Nth `X-Forwarded-For` entry from the right (fewer entries falls back to the socket). Legacy `true`/`1` mean `1`. Behind Cloudflare then Apache use `2`, or configure Apache `mod_remoteip` with Cloudflare's ranges and use `1`. `CF-Connecting-IP` is not trusted. Leave unset when nothing sits in front, or a caller can choose its own key |
 | `MCP_HTTP_DEEP_MAX_PAGES` | `10` | HTTP only: most pages one tool call may fetch (deep search, `detail=true` lists). Stdio keeps each tool's own maximum |
 | `MCP_ALLOWED_ORIGINS` | unset | HTTP only: extra browser `Origin`s allowed to call `/mcp`, comma-separated (`*` = any). Requests without an `Origin` (non-browser clients) are unaffected |
 | `MCP_PUBLIC_BASE_URL` | unset | HTTP only: the public `https://` origin advertised on `/` and in `/.well-known/mcp.json`, e.g. `https://mcp.surhires.com`. Never taken from the request's `Host` |
@@ -221,11 +221,12 @@ Multi-stage: dev dependencies are installed to compile TypeScript, then discarde
 | Variable | Why |
 |---|---|
 | `MCP_HTTP_HOST` | Defaults to `0.0.0.0` in the image. Binding to `127.0.0.1` inside a container gives you a process that looks healthy and answers nothing from outside it |
-| `TRUST_PROXY` | Behind a reverse proxy every caller arrives from the proxy's address and would share one rate-limit bucket. Set `1` there (and only there) |
+| `TRUST_PROXY` | Behind a reverse proxy every caller arrives from the proxy's address and would share one rate-limit bucket. Set it to the number of proxy hops (`1` for one proxy; `2` for Cloudflare then Apache) there, and only there |
 | `MCP_PUBLIC_BASE_URL` | The public URL shown on the status page and in the discovery document; otherwise they point at `127.0.0.1` |
 | `MCP_ALLOWED_HOSTS` | The transport rejects an unrecognised `Host` header (DNS-rebinding protection). Behind a proxy or a published name the Host is **not** localhost, so list it or every request gets **403**. Comma-separated; `*` disables the check, for a trusted network only |
 
 ```bash
+# TRUST_PROXY is the number of proxy hops (2 behind Cloudflare then Apache).
 docker run --rm -p 8080:3000 \
   -e MCP_ALLOWED_HOSTS=mcp.example.com,mcp.example.com:443 \
   -e MCP_PUBLIC_BASE_URL=https://mcp.example.com \

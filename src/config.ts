@@ -38,12 +38,18 @@ const ConfigSchema = z.object({
     .transform((s) => s.split(",").map((h) => h.trim().replace(/\/+$/, "")).filter(Boolean)),
   // Requests per minute per client on POST /mcp. 0 disables the limiter.
   rateLimitPerMin: intFromEnv(60, 0, 100_000),
-  // Behind a reverse proxy: key the rate limit on the right-most
-  // X-Forwarded-For hop (the one our own proxy adds) instead of the socket.
+  // Number of trusted reverse-proxy hops in front of this server. 0 = key the
+  // rate limit on the socket address. N = key on the Nth X-Forwarded-For entry
+  // from the right. Legacy true/yes/1 mean 1. Anything unparsable means 0.
   trustProxy: z
     .string()
     .default("")
-    .transform((s) => ["1", "true", "yes"].includes(s.trim().toLowerCase())),
+    .transform((s): number => {
+      const v = s.trim().toLowerCase();
+      if (v === "true" || v === "yes") return 1;
+      if (!/^\d+$/.test(v)) return 0;
+      return Math.min(Number(v), 10);
+    }),
   // Pages one HTTP tool call may fetch (deep search and detail=true lists).
   httpDeepMaxPages: intFromEnv(10, 1, 100),
   // Public origin advertised on the status page and discovery document, e.g.
