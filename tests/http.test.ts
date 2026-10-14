@@ -46,6 +46,28 @@ describe("HTTP hardening (defaults)", () => {
     assert.equal(typeof json.error.code, "number");
   });
 
+  test("a chunked (no Content-Length) oversized body gets 413", async () => {
+    const chunk = Buffer.alloc(64 * 1024, 120);
+    let sent = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent >= 3 * 1024 * 1024) return controller.close();
+        sent += chunk.length;
+        controller.enqueue(chunk);
+      },
+    });
+    const res = await fetch(`${srv.base}/mcp`, {
+      method: "POST",
+      headers: MCP_HEADERS,
+      body: stream,
+      // @ts-expect-error duplex is required by undici for streamed bodies
+      duplex: "half",
+    });
+    assert.equal(res.status, 413);
+    const json = (await res.json()) as { error: { code: number } };
+    assert.equal(typeof json.error.code, "number");
+  });
+
   test("a malformed body gets 400 and JSON-RPC code -32700", async () => {
     const res = await fetch(`${srv.base}/mcp`, { method: "POST", headers: MCP_HEADERS, body: "{bad" });
     assert.equal(res.status, 400);
