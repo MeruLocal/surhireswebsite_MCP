@@ -15,8 +15,11 @@ The server disclaims being Surhires' own server. It also tells agents that the r
 | `src/tools/company.ts:64` (`get_api_and_mcp_status` description) | "...published ... no MCP server, and described its own MCP server as planned..." |
 | `src/tools/company.ts:81` (hard-coded `summary` line) | "Surhires' own /mcp-server page described its MCP server as planned, not shipping." |
 | `README.md:3`, `README.md:33`, `README.md:404` | "An MCP server for", "no shipped MCP server", "This is an unofficial client, not affiliated with or endorsed by Surhires." |
+| `README.md:376` (§8 table, row "Official MCP server") *(added 2026-10-14 re-audit)* | "Surhires ships it — then prefer theirs over this": tells readers this server is a stand-in to be replaced |
 
 Measured: on `main` (248f38d), `GET /` on a local `dist/http.js` returns the "unofficial client" footer.
+
+Re-audit 2026-10-14 (new `audit-live-mcp.mjs`, `--path /mcp`): **FAIL `X.identity`** "status page says 'unofficial', 'not affiliated'". The instructions/tools/serverInfo identity check PASSes, so the status page and README are the remaining surfaces.
 
 ## Proposed fix
 
@@ -38,6 +41,7 @@ Wording only. There is no behaviour change.
    - Line 3: "The official MCP server for Surhires".
    - Line 33: "no authenticated MCP surface for tenant data".
    - Line 404: "This is the official Surhires MCP server for public website content."
+   - Line 376: replace the "Official MCP server" row with one for the *authenticated* (tenant-data) MCP surface: blocker "no tenant API", unblocked by "a documented, authenticated API".
    - The Soor LLC wording stays unchanged.
 
 ## Tests to add
