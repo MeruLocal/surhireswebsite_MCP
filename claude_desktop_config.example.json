@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "surhires": {
+      "command": "node",
+      "args": ["C:\\Users\\Hp\\Desktop\\Surhires_MCP\\dist\\index.js"],
+      "env": {
+        "SURHIRES_MARKET": "in",
+        "SURHIRES_CONTACT": "you@example.com",
+        "LOG_LEVEL": "info"
+      }
+    }
+  }
+}

@@ -1,0 +1,214 @@
+import { z } from "zod";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { asToolResult, parseFailure } from "../utils/errors.js";
+import {
+  limitArg,
+  marketArg,
+  normalisePath,
+  offsetArg,
+  paginate,
+  queryArg,
+} from "../utils/validation.js";
+import { fetchAll, presentPage, rank, slugOf, type ToolContext } from "./shared.js";
+
+const SECTIONS = [
+  "features",
+  "integrations",
+  "solutions",
+  "resources",
+  "blog",
+  "vs",
+  "tools",
+  "legal",
+  "partners",
+] as const;
+
+export function registerPageTools(server: McpServer, ctx: ToolContext, baseUrl: string): void {
+  server.registerTool(
+    "list_site_pages",
+    {
+      title: "List published Surhires pages",
+      description:
+        "Lists every page Surhires publishes, read from its sitemap index. Use this to discover valid paths and slugs before calling any other tool. Optionally filter to one section.",
+      inputSchema: {
+        section: z
+          .enum(SECTIONS)
+          .optional()
+          .describe("Restrict to one section of the site. Omit for every published page."),
+        contains: z
+          .string()
+          .trim()
+          .min(1)
+          .max(100)
+          .optional()
+          .describe("Keep only paths containing this substring."),
+        limit: limitArg(100, 500),
+        offset: offsetArg,
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    asToolResult(async ({ section, contains, limit, offset }) => {
+      const index = section
+        ? await ctx.client.sectionPaths(`/${section}`)
+        : await ctx.client.getSiteIndex();
+
+      const filtered = contains
+        ? index.filter((e) => e.path.toLowerCase().includes(contains.toLowerCase()))
+        : index;
+
+      return {
+        ...paginate(
+          filtered.map((e) => ({ path: e.path, slug: slugOf(e.path), last_modified: e.last_modified })),
+          offset,
+          limit,
+        ),
+        note: "Paths are unprefixed as published in the sitemap. The server applies the market prefix (e.g. /in) automatically when fetching.",
+      };
+    }),
+  );
+
+  server.registerTool(
+    "get_page",
+    {
+      title: "Read a Surhires page",
+      description:
+        "Fetches any published Surhires page by path and returns its structured content: title, heading, description, publish/modified dates, heading outline, body text, any comparison tables, and the page's FAQ entries. Works for every path list_site_pages returns.",
+      inputSchema: {
+        path: z
+          .string()
+          .trim()
+          .min(1)
+          .describe('Site path, e.g. "/features/resume-parsing" or "/pricing". A full surhires.com URL is also accepted.'),
+        market: marketArg,
+        max_chars: z.coerce
+          .number()
+          .int()
+          .min(200)
+          .max(100_000)
+          .default(8_000)
+          .describe("Maximum characters of body text to return before truncating."),
+        include_links: z
+          .boolean()
+          .default(false)
+          .describe("Also return the internal links found on the page, useful for crawling onward."),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    asToolResult(async ({ path, market, max_chars, include_links }) => {
+      const clean = normalisePath(path, baseUrl);
+      const page = await ctx.client.getPage(clean, market);
+      return presentPage(page, { maxChars: max_chars, includeLinks: include_links });
+    }),
+  );
+
+  server.registerTool(
+    "search_site",
+    {
+      title: "Search Surhires' published pages",
+      description:
+        "Keyword search across Surhires' published pages. By default it matches page paths and titles, which is fast. Set deep=true to fetch candidate pages and search their full body text and FAQ answers -- slower, but finds wording that is not in the title. All query terms must match.",
+      inputSchema: {
+        query: queryArg,
+        section: z
+          .enum(SECTIONS)
+          .optional()
+          .describe("Restrict the search to one section of the site."),
+        deep: z
+          .boolean()
+          .default(false)
+          .describe("Fetch and search full page text. Slower; respects the configured concurrency limit."),
+        deep_max_pages: z.coerce
+          .number()
+          .int()
+          .min(1)
+          .max(60)
+          .default(25)
+          .describe("When deep=true, the maximum number of pages to fetch and scan."),
+        limit: limitArg(10, 50),
+        offset: offsetArg,
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    asToolResult(async ({ query, section, deep, deep_max_pages, limit, offset }) => {
+      const index = section
+        ? await ctx.client.sectionPaths(`/${section}`)
+        : await ctx.client.getSiteIndex();
+
+      if (index.length === 0) throw parseFailure("/sitemap.xml", "any published page paths");
+
+      const shallow = rank(
+        query,
+        index.map((e) => ({ path: e.path })),
+      );
+
+      if (!deep) {
+        const page = paginate(shallow, offset, limit);
+        return {
+          ...page,
+          query,
+          mode: "shallow",
+          ...(page.total === 0
+            ? {
+                note: "No page path or title matched every term. Retry with deep=true to search full page text, or with fewer terms.",
+              }
+            : {}),
+        };
+      }
+
+      // Deep mode: scan the shallow winners first, then fill up to the budget
+      // with the rest of the section so a non-title match is still reachable.
+      const prioritised = [
+        ...shallow.map((h) => h.path),
+        ...index.map((e) => e.path).filter((p) => !shallow.some((h) => h.path === p)),
+      ].slice(0, deep_max_pages);
+
+      const pages = await fetchAll(ctx, prioritised);
+      const hits = rank(
+        query,
+        pages.map((p) => ({
+          path: p.path,
+          title: p.title,
+          description: p.description,
+          body: `${p.body_text}\n${p.faqs.map((f) => `${f.question} ${f.answer}`).join("\n")}`,
+        })),
+      );
+
+      const page = paginate(hits, offset, limit);
+      return {
+        ...page,
+        query,
+        mode: "deep",
+        pages_scanned: pages.length,
+        ...(prioritised.length < index.length
+          ? { note: `Scanned ${prioritised.length} of ${index.length} pages. Raise deep_max_pages or narrow with section to cover more.` }
+          : {}),
+      };
+    }),
+  );
+
+  server.registerTool(
+    "get_page_faqs",
+    {
+      title: "Get a page's FAQ entries",
+      description:
+        "Returns just the question-and-answer pairs Surhires publishes on a page, taken from the page's structured data. Most feature, integration and comparison pages carry 4-8 entries, and they often hold the specifics -- limits, caveats, what is not supported -- that the prose does not.",
+      inputSchema: {
+        path: z.string().trim().min(1).describe('Site path, e.g. "/features/resume-parsing".'),
+        market: marketArg,
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    asToolResult(async ({ path, market }) => {
+      const clean = normalisePath(path, baseUrl);
+      const page = await ctx.client.getPage(clean, market);
+      if (page.faqs.length === 0) {
+        return {
+          path: page.path,
+          faqs: [],
+          note: "This page publishes no FAQ structured data. Call get_page for its prose instead.",
+        };
+      }
+      return { path: page.path, title: page.title, count: page.faqs.length, faqs: page.faqs };
+    }),
+  );
+}
