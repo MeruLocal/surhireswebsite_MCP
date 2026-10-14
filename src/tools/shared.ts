@@ -1,7 +1,8 @@
+import { z } from "zod";
 import type { Market } from "../config.js";
 import type { SurhiresClient, SitemapEntry } from "../clients/surhires-client.js";
 import type { ExtractedPage } from "../clients/extract.js";
-import { notFound } from "../utils/errors.js";
+import { notFound, SurhiresError } from "../utils/errors.js";
 import { matchesAll, score, terms } from "../utils/validation.js";
 
 /** Everything a tool handler needs, passed once at registration. */
@@ -14,6 +15,20 @@ export interface ToolContext {
    * applies.
    */
   deepPageCap?: number;
+  /** Upper bound on every max_chars argument (MCP_MAX_CHARS_LIMIT). */
+  maxCharsLimit?: number;
+}
+
+/** A max_chars argument bounded by the configured limit. */
+export function maxCharsArg(ctx: ToolContext, fallback: number) {
+  const limit = ctx.maxCharsLimit ?? 25_000;
+  return z.coerce
+    .number()
+    .int()
+    .min(200)
+    .max(limit)
+    .default(Math.min(fallback, limit))
+    .describe(`Maximum characters of body text to return before truncating (200-${limit}).`);
 }
 
 /** Applies the transport's per-call page budget to a requested page count. */
@@ -168,14 +183,46 @@ export function excerptAround(body: string, queryTerms: string[], width = 240): 
   return undefined;
 }
 
-/** Fetches many pages with the client's own concurrency limit doing the work. */
-export async function fetchAll(
-  ctx: ToolContext,
-  paths: string[],
-  market?: Market,
-): Promise<ExtractedPage[]> {
+export interface FetchAllResult {
+  /** Pages that loaded, in request order. */
+  pages: ExtractedPage[];
+  /** Loaded pages keyed by the path that was requested (not the prefixed one). */
+  byPath: Map<string, ExtractedPage>;
+  /** Pages that failed, keyed by requested path, with a caller-safe reason. */
+  failed: { path: string; error: string }[];
+}
+
+/** The error text a caller may see for one failed page. */
+export const failureText = (error: unknown): string =>
+  error instanceof SurhiresError ? error.message : "Unexpected internal error while reading this page.";
+
+/**
+ * Fetches many pages with the client's own concurrency limit doing the work.
+ * Failures are reported, never dropped, so a caller can tell "this page
+ * failed" from "this page has no data".
+ */
+export async function fetchAll(ctx: ToolContext, paths: string[], market?: Market): Promise<FetchAllResult> {
   const settled = await Promise.allSettled(paths.map((p) => ctx.client.getPage(p, market)));
-  return settled
-    .filter((r): r is PromiseFulfilledResult<ExtractedPage> => r.status === "fulfilled")
-    .map((r) => r.value);
+  const result: FetchAllResult = { pages: [], byPath: new Map(), failed: [] };
+  settled.forEach((r, i) => {
+    const path = paths[i]!;
+    if (r.status === "fulfilled") {
+      result.pages.push(r.value);
+      result.byPath.set(path, r.value);
+    } else {
+      result.failed.push({ path, error: failureText(r.reason) });
+    }
+  });
+  return result;
+}
+
+/** Throws the first failure when every page failed: an empty result would be a false "no hits". */
+export function assertSomeLoaded(fetched: FetchAllResult): void {
+  if (fetched.pages.length === 0 && fetched.failed.length > 0) {
+    throw new SurhiresError(
+      "upstream",
+      `None of the ${fetched.failed.length} pages could be read. First failure: ${fetched.failed[0]!.error}`,
+      "Retry shortly, or call get_server_diagnostics.",
+    );
+  }
 }

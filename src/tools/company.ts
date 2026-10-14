@@ -3,7 +3,8 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { asToolResult, parseFailure } from "../utils/errors.js";
 import { extractOrganization } from "../clients/extract.js";
 import { marketArg } from "../utils/validation.js";
-import { presentPage, READ_ONLY, slugOf, type ToolContext } from "./shared.js";
+import { failureText, presentPage, READ_ONLY, slugOf, maxCharsArg, type ToolContext } from "./shared.js";
+import { limitArg, offsetArg, paginate } from "../utils/validation.js";
 import { ListOutput } from "./schemas.js";
 
 /**
@@ -15,6 +16,37 @@ import { ListOutput } from "./schemas.js";
  * that state it and returns their current text, so the answer updates itself
  * the day Surhires ships an API.
  */
+/** Date the static status claims were last checked by hand. */
+export const STATUS_VERIFIED_ON = "2026-10-13";
+
+export const STATUS_CLAIMS: { claim: string; verified_on: string; source_url?: string; method?: string }[] = [
+  {
+    claim: "No public REST API, API key flow, OAuth app or developer documentation was published on surhires.com.",
+    verified_on: STATUS_VERIFIED_ON,
+    source_url: "https://surhires.com/whats-shipping",
+  },
+  {
+    claim: "docs.surhires.com, developers.surhires.com and api.surhires.com did not resolve in DNS.",
+    verified_on: STATUS_VERIFIED_ON,
+    method: "DNS lookup",
+  },
+  {
+    claim: "robots.txt disallows /api/ for every user agent, so that surface is not readable here.",
+    verified_on: STATUS_VERIFIED_ON,
+    source_url: "https://surhires.com/robots.txt",
+  },
+  {
+    claim: "No authenticated MCP surface for tenant data was published; this server is the official Surhires MCP server for public website content.",
+    verified_on: STATUS_VERIFIED_ON,
+    source_url: "https://surhires.com/mcp-server",
+  },
+  {
+    claim: "The Zapier app was described as in development and not usable.",
+    verified_on: STATUS_VERIFIED_ON,
+    source_url: "https://surhires.com/integrations/zapier",
+  },
+];
+
 export function registerCompanyTools(server: McpServer, ctx: ToolContext): void {
   server.registerTool(
     "get_company_info",
@@ -62,10 +94,10 @@ export function registerCompanyTools(server: McpServer, ctx: ToolContext): void 
     {
       title: "Check whether Surhires offers an API, MCP server or Zapier app",
       description:
-        "Reads the pages where Surhires states the status of its programmatic surfaces -- /mcp-server, /whats-shipping and /integrations/zapier -- and returns their current published text plus FAQ entries. Call this before assuming any Surhires API exists: as of this server's last verification, Surhires published no REST API, API keys or developer docs for tenant data; this server is the official Surhires MCP server for public website content.",
+        "Reads the pages where Surhires states the status of its programmatic surfaces -- /mcp-server, /whats-shipping and /integrations/zapier -- and returns their current published text plus FAQ entries. Call this before assuming any Surhires API exists: as of this server's last verification, Surhires published no REST API, API keys or developer docs for tenant data; this server is the official Surhires MCP server for public website content. Those dated findings are returned as `summary` claims with their verification date; where the live page text in `pages` says otherwise, the live text wins.",
       inputSchema: {
         market: marketArg,
-        max_chars: z.coerce.number().int().min(200).max(40_000).default(6_000),
+        max_chars: maxCharsArg(ctx, 6_000),
       },
       annotations: READ_ONLY,
     },
@@ -74,20 +106,16 @@ export function registerCompanyTools(server: McpServer, ctx: ToolContext): void 
       const settled = await Promise.allSettled(targets.map((p) => ctx.client.getPage(p, market)));
 
       return {
-        verified_at_build: "2026-10-13",
-        summary: [
-          "No public REST API, API key flow, OAuth app or developer documentation was published on surhires.com.",
-          "docs.surhires.com, developers.surhires.com and api.surhires.com did not resolve in DNS.",
-          "robots.txt disallows /api/ for every user agent, so that surface is not readable here.",
-          "No authenticated MCP surface for tenant data was published; this server is the official Surhires MCP server for public website content.",
-          "The Zapier app was described as in development and not usable.",
-        ],
+        // Static findings from the last manual check. Each carries its date and
+        // source so a reader can tell them apart from the live page text below.
+        summary: STATUS_CLAIMS,
+        summary_note: "Dated findings from the last manual verification. The live page text in `pages` wins on any conflict.",
         pages: settled.map((result, i) =>
           result.status === "fulfilled"
             ? presentPage(result.value, { maxChars: max_chars })
             : {
                 path: ctx.client.marketPath(targets[i]!, market),
-                error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+                error: failureText(result.reason),
                 note: "Page unavailable. If it now 404s, Surhires may have restructured these pages -- re-verify before concluding anything.",
               },
         ),
@@ -160,10 +188,10 @@ export function registerCompanyTools(server: McpServer, ctx: ToolContext): void 
     {
       title: "Get Surhires security and compliance posture",
       description:
-        "Reads Surhires' /security and /trust-center pages: data handling, subprocessors, certification status and compliance claims. Note that Surhires describes its SOC 2 work as a readiness programme rather than a completed certification, so read the wording carefully rather than taking a badge at face value.",
+        "Reads Surhires' /security and /trust-center pages: data handling, subprocessors, certification status and compliance claims. Read the wording of any certification claim carefully (readiness work and a completed audit are different things) rather than taking a badge at face value.",
       inputSchema: {
         market: marketArg,
-        max_chars: z.coerce.number().int().min(200).max(60_000).default(8_000),
+        max_chars: maxCharsArg(ctx, 8_000),
       },
       annotations: READ_ONLY,
     },
@@ -176,7 +204,7 @@ export function registerCompanyTools(server: McpServer, ctx: ToolContext): void 
             ? presentPage(result.value, { maxChars: max_chars })
             : {
                 path: ctx.client.marketPath(targets[i]!, market),
-                error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+                error: failureText(result.reason),
               },
         ),
       };
@@ -189,15 +217,18 @@ export function registerCompanyTools(server: McpServer, ctx: ToolContext): void 
       title: "List Surhires legal and compliance pages",
       description:
         "Lists the pages under /legal -- terms, privacy, DPA, GDPR, India DPDPA, CCPA, EEO/OFCCP, TCPA/CAN-SPAM, cookies, subprocessors, accessibility. Read any of them in full with get_page.",
-      inputSchema: {},
+      inputSchema: { limit: limitArg(50, 100), offset: offsetArg },
       annotations: READ_ONLY,
       outputSchema: ListOutput,
     },
-    asToolResult(async () => {
+    asToolResult(async ({ limit, offset }) => {
       const entries = await ctx.client.sectionPaths("/legal");
       return {
-        total: entries.length,
-        results: entries.map((e) => ({ slug: slugOf(e.path), path: e.path, last_modified: e.last_modified })),
+        ...paginate(
+          entries.map((e) => ({ slug: slugOf(e.path), path: e.path, last_modified: e.last_modified })),
+          offset,
+          limit,
+        ),
         hint: 'Read one with get_page, e.g. path="/legal/dpdpa".',
       };
     }, { structured: true }),

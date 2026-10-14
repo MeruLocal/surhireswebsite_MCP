@@ -11,13 +11,15 @@ import {
   rank,
   resolveSlug,
   slugOf,
+  titleise,
   toListing,
+  maxCharsArg,
   type ToolContext,
 } from "./shared.js";
 
 /**
  * Catalogue tools over the three big enumerable sections of the site:
- * /features (~45 pages), /integrations (~40), /solutions (~14).
+ * /features, /integrations and /solutions.
  *
  * Listing is driven by the sitemap, so it cannot drift out of date against a
  * hardcoded array; names and descriptions are enriched from each page's
@@ -77,18 +79,19 @@ export function registerCatalogTools(server: McpServer, ctx: ToolContext): void 
 
         const budget = capDeepPages(ctx, limit);
         const window = items.slice(offset, offset + budget.pages);
-        const pages = await fetchAll(ctx, window.map((i) => i.path), market);
-        const byPath = new Map(pages.map((p) => [slugOf(p.path), p]));
+        const fetched = await fetchAll(ctx, window.map((i) => i.path), market);
+        const errors = new Map(fetched.failed.map((f) => [f.path, f.error]));
 
         let detailed = window.map((item) => {
-          const page = byPath.get(item.slug);
+          const page = fetched.byPath.get(item.path);
           return {
             slug: item.slug,
             path: item.path,
             name: page?.heading ?? item.name,
             description: page?.description,
             date_modified: page?.date_modified,
-            faq_count: page?.faqs.length ?? 0,
+            // Omitted, not 0, when the page was not read.
+            ...(page ? { faq_count: page.faqs.length } : { detail_error: errors.get(item.path) }),
           };
         });
 
@@ -111,6 +114,7 @@ export function registerCatalogTools(server: McpServer, ctx: ToolContext): void 
           returned: detailed.length,
           has_more: offset + window.length < items.length,
           ...(budget.capped ? { detail_capped_to: budget.pages } : {}),
+          failed_count: fetched.failed.length,
           results: detailed,
         };
       }, { structured: true }),
@@ -124,13 +128,7 @@ export function registerCatalogTools(server: McpServer, ctx: ToolContext): void 
         inputSchema: {
           slug: slugArg.describe(`Page slug, e.g. "${opts.slugExample}". Call ${opts.listName} for valid slugs.`),
           market: marketArg,
-          max_chars: z.coerce
-            .number()
-            .int()
-            .min(200)
-            .max(100_000)
-            .default(10_000)
-            .describe("Maximum characters of body text before truncating."),
+          max_chars: maxCharsArg(ctx, 10_000),
         },
         annotations: READ_ONLY,
       },
@@ -187,31 +185,41 @@ export function registerCatalogTools(server: McpServer, ctx: ToolContext): void 
       title: "List Surhires' free recruiter tools",
       description:
         "Lists the free public calculators and generators Surhires hosts: boolean string generator, resume screener, placement fee and ROI calculators, time-to-fill calculator, pay transparency checker, job description analyzer, recruiter email templates. These are web pages, not APIs -- this tool returns their descriptions and paths so a person can open them.",
-      inputSchema: { market: marketArg, detail: z.boolean().default(true).describe("Fetch each page for its published description.") },
+      inputSchema: {
+        market: marketArg,
+        detail: z.boolean().default(true).describe("Fetch each page in the returned window for its published description."),
+        limit: limitArg(50, 100),
+        offset: offsetArg,
+      },
       annotations: READ_ONLY,
       outputSchema: ListOutput,
     },
-    asToolResult(async ({ market, detail }) => {
+    asToolResult(async ({ market, detail, limit, offset }) => {
       const entries = await ctx.client.sectionPaths("/tools");
-      if (!detail) return { total: entries.length, results: entries.map(toListing) };
+      const note = "These are interactive web pages. This server reads their published copy; it cannot run a calculator for you.";
+      if (!detail) return { ...paginate(entries.map(toListing), offset, limit), note };
 
-      const budget = capDeepPages(ctx, entries.length);
-      const pages = await fetchAll(ctx, entries.slice(0, budget.pages).map((e) => e.path), market);
-      const bySlug = new Map(pages.map((p) => [slugOf(p.path), p]));
+      const budget = capDeepPages(ctx, limit);
+      const page = paginate(entries, offset, budget.pages);
+      const fetched = await fetchAll(ctx, page.results.map((e) => e.path), market);
+      const errors = new Map(fetched.failed.map((f) => [f.path, f.error]));
       return {
-        total: entries.length,
+        ...page,
+        limit,
         ...(budget.capped ? { detail_capped_to: budget.pages } : {}),
-        results: entries.map((e) => {
+        failed_count: fetched.failed.length,
+        results: page.results.map((e) => {
           const slug = slugOf(e.path);
-          const page = bySlug.get(slug);
+          const p = fetched.byPath.get(e.path);
           return {
             slug,
             path: e.path,
-            name: page?.heading ?? slug,
-            description: page?.description,
+            name: p?.heading ?? titleise(slug),
+            description: p?.description,
+            ...(p ? {} : { detail_error: errors.get(e.path) }),
           };
         }),
-        note: "These are interactive web pages. This server reads their published copy; it cannot run a calculator for you.",
+        note,
       };
     }, { structured: true }),
   );

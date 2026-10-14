@@ -14,18 +14,21 @@ import {
 import { ListOutput } from "./schemas.js";
 import {
   READ_ONLY,
+  assertSomeLoaded,
   capDeepPages,
+  failureText,
   fetchAll,
   presentPage,
   rank,
   resolveSlug,
   slugOf,
   titleise,
+  maxCharsArg,
   type ToolContext,
 } from "./shared.js";
 
 /**
- * Editorial content: the blog (~33 posts), the long-form /resources guides,
+ * Editorial content: the blog, the long-form /resources guides,
  * and the dated product pages (changelog, roadmap, whats-shipping).
  *
  * Blog posts carry a BlogPosting node with headline, datePublished,
@@ -79,11 +82,11 @@ export function registerContentTools(server: McpServer, ctx: ToolContext): void 
 
       const budget = capDeepPages(ctx, limit);
       const window = items.slice(offset, offset + budget.pages);
-      const pages = await fetchAll(ctx, window.map((i) => i.path), market);
-      const bySlug = new Map(pages.map((p) => [slugOf(p.path), p]));
+      const fetched = await fetchAll(ctx, window.map((i) => i.path), market);
+      const errors = new Map(fetched.failed.map((f) => [f.path, f.error]));
 
       let detailed = window.map((item) => {
-        const page = bySlug.get(item.slug);
+        const page = fetched.byPath.get(item.path);
         return {
           slug: item.slug,
           path: item.path,
@@ -91,6 +94,7 @@ export function registerContentTools(server: McpServer, ctx: ToolContext): void 
           description: page?.description,
           date_published: page?.date_published,
           date_modified: page?.date_modified,
+          ...(page ? {} : { detail_error: errors.get(item.path) }),
         };
       });
 
@@ -114,6 +118,7 @@ export function registerContentTools(server: McpServer, ctx: ToolContext): void 
         has_more: offset + window.length < items.length,
         sort,
         ...(budget.capped ? { detail_capped_to: budget.pages } : {}),
+        failed_count: fetched.failed.length,
         results: detailed,
         note:
           sort === "path"
@@ -132,7 +137,7 @@ export function registerContentTools(server: McpServer, ctx: ToolContext): void 
       inputSchema: {
         slug: slugArg.describe('Post slug, e.g. "independent-contractor-compliance-guide-in-the-united-states".'),
         market: marketArg,
-        max_chars: z.coerce.number().int().min(200).max(100_000).default(15_000),
+        max_chars: maxCharsArg(ctx, 15_000),
       },
       annotations: READ_ONLY,
     },
@@ -190,17 +195,19 @@ export function registerContentTools(server: McpServer, ctx: ToolContext): void 
         ...entries.map((e) => e.path).filter((p) => !shallow.some((h) => h.path === p)),
       ].slice(0, budget.pages);
 
-      const pages = await fetchAll(ctx, prioritised, market);
+      const fetched = await fetchAll(ctx, prioritised, market);
+      assertSomeLoaded(fetched);
       const hits = rank(
         query,
-        pages.map((p) => ({ path: p.path, title: p.heading, description: p.description, body: p.body_text })),
+        fetched.pages.map((p) => ({ path: p.path, title: p.heading, description: p.description, body: p.body_text })),
       );
 
       return {
         ...paginate(hits, offset, limit),
         query,
         mode: "deep",
-        posts_scanned: pages.length,
+        posts_scanned: fetched.pages.length,
+        posts_failed: fetched.failed.length,
         total_posts: entries.length,
         ...(budget.capped ? { deep_max_posts_capped_to: budget.pages } : {}),
       };
@@ -213,35 +220,44 @@ export function registerContentTools(server: McpServer, ctx: ToolContext): void 
       title: "List Surhires long-form resources",
       description:
         "Lists the long-form guides under /resources: ATS buying guides, ATS vs recruitment CRM, migrating off Bullhorn, time-to-fill benchmarks, compliance checklists, recruiter template libraries.",
-      inputSchema: { detail: z.boolean().default(true).describe("Fetch each guide for its published title and description."), market: marketArg },
+      inputSchema: {
+        detail: z.boolean().default(true).describe("Fetch each guide in the returned window for its published title and description."),
+        market: marketArg,
+        limit: limitArg(50, 100),
+        offset: offsetArg,
+      },
       annotations: READ_ONLY,
       outputSchema: ListOutput,
     },
-    asToolResult(async ({ detail, market }) => {
+    asToolResult(async ({ detail, market, limit, offset }) => {
       const entries = await ctx.client.sectionPaths("/resources");
       if (!detail) {
-        return { total: entries.length, results: entries.map((e) => ({ slug: slugOf(e.path), path: e.path })) };
+        return paginate(entries.map((e) => ({ slug: slugOf(e.path), path: e.path })), offset, limit);
       }
-      const budget = capDeepPages(ctx, entries.length);
-      const pages = await fetchAll(ctx, entries.slice(0, budget.pages).map((e) => e.path), market);
-      const bySlug = new Map(pages.map((p) => [slugOf(p.path), p]));
+      const budget = capDeepPages(ctx, limit);
+      const page = paginate(entries, offset, budget.pages);
+      const fetched = await fetchAll(ctx, page.results.map((e) => e.path), market);
+      const errors = new Map(fetched.failed.map((f) => [f.path, f.error]));
       return {
-        total: entries.length,
+        ...page,
+        limit,
         ...(budget.capped
           ? {
               detail_capped_to: budget.pages,
-              note: `Details were fetched for the first ${budget.pages} guides only (per-call page cap). Read any other one with get_page.`,
+              note: `This endpoint fetches at most ${budget.pages} guides per call. Page on with offset.`,
             }
           : {}),
-        results: entries.map((e) => {
+        failed_count: fetched.failed.length,
+        results: page.results.map((e) => {
           const slug = slugOf(e.path);
-          const page = bySlug.get(slug);
+          const p = fetched.byPath.get(e.path);
           return {
             slug,
             path: e.path,
-            title: page?.heading ?? titleise(slug),
-            description: page?.description,
-            date_modified: page?.date_modified,
+            title: p?.heading ?? titleise(slug),
+            description: p?.description,
+            date_modified: p?.date_modified,
+            ...(p ? {} : { detail_error: errors.get(e.path) }),
           };
         }),
       };
@@ -254,7 +270,7 @@ export function registerContentTools(server: McpServer, ctx: ToolContext): void 
       title: "Get the Surhires changelog",
       description:
         "Reads Surhires' changelog page: its release policy, what each entry records, and how breaking changes are given notice. Be aware the changelog may be empty by design -- Surhires states it records nothing before general availability and backfills nothing, so an empty result is the real answer, not a failure.",
-      inputSchema: { market: marketArg, max_chars: z.coerce.number().int().min(200).max(60_000).default(10_000) },
+      inputSchema: { market: marketArg, max_chars: maxCharsArg(ctx, 10_000) },
       annotations: READ_ONLY,
     },
     asToolResult(async ({ market, max_chars }) => {
@@ -275,7 +291,7 @@ export function registerContentTools(server: McpServer, ctx: ToolContext): void 
           .default("both")
           .describe("Which page to read."),
         market: marketArg,
-        max_chars: z.coerce.number().int().min(200).max(60_000).default(10_000),
+        max_chars: maxCharsArg(ctx, 10_000),
       },
       annotations: READ_ONLY,
     },
@@ -289,7 +305,7 @@ export function registerContentTools(server: McpServer, ctx: ToolContext): void 
             ? presentPage(result.value, { maxChars: max_chars })
             : {
                 path: ctx.client.marketPath(wanted[i]!, market),
-                error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+                error: failureText(result.reason),
               },
         ),
       };

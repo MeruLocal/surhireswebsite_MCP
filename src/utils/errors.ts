@@ -112,6 +112,73 @@ export const parseFailure = (path: string, what: string) =>
     "The page markup may have changed. Call get_page on the same path to see the raw structured extraction.",
   );
 
+let responseCap = 25_000;
+
+/** Sets the largest serialised result, in characters (from MCP_MAX_RESPONSE_CHARS). */
+export function setResponseCap(chars: number): void {
+  responseCap = chars;
+}
+
+type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
+
+/** Finds the longest string, or failing that the longest array, anywhere in a value. */
+function largest(value: Json, kind: "string" | "array"): { holder: Json[] | Record<string, Json>; key: string | number; size: number } | undefined {
+  let best: { holder: Json[] | Record<string, Json>; key: string | number; size: number } | undefined;
+  const visit = (node: Json) => {
+    if (node === null || typeof node !== "object") return;
+    const entries: [string | number, Json][] = Array.isArray(node) ? node.map((v, i) => [i, v]) : Object.entries(node);
+    for (const [key, child] of entries) {
+      const size =
+        kind === "string" && typeof child === "string"
+          ? child.length
+          : kind === "array" && Array.isArray(child)
+            ? JSON.stringify(child).length
+            : -1;
+      if (size > (best?.size ?? 0)) best = { holder: node, key, size };
+      visit(child);
+    }
+  };
+  visit(value);
+  return best;
+}
+
+const TRIM_MARK = " [...truncated to fit the response size limit]";
+
+/**
+ * Shrinks a result until its JSON fits the cap: the longest text field is cut
+ * first, then the longest list loses items from its end. The result stays
+ * valid JSON with the same shape; it is never cut mid-structure.
+ */
+export function fitToCap(value: unknown, cap: number): { value: unknown; truncated: boolean } {
+  const size = (v: unknown) => JSON.stringify(v, null, 2).length;
+  if (size(value) <= cap) return { value, truncated: false };
+  const copy = JSON.parse(JSON.stringify(value)) as Json;
+  const isObject = copy !== null && typeof copy === "object" && !Array.isArray(copy);
+  if (isObject) {
+    (copy as Record<string, Json>).response_truncated = true;
+    (copy as Record<string, Json>).response_hint =
+      "This result was shortened to fit the response size limit. Lower max_chars, or page with limit/offset.";
+  }
+
+  for (let guard = 0; guard < 200 && size(copy) > cap; guard += 1) {
+    const excess = size(copy) - cap;
+    const text = largest(copy, "string");
+    if (text && text.size > 200 + TRIM_MARK.length) {
+      const holder = text.holder as Record<string | number, Json>;
+      const current = holder[text.key] as string;
+      const keep = Math.max(200, current.length - excess - TRIM_MARK.length - 16);
+      holder[text.key] = current.slice(0, keep) + TRIM_MARK;
+      continue;
+    }
+    const list = largest(copy, "array");
+    if (!list) break;
+    const arr = (list.holder as Record<string | number, Json>)[list.key] as Json[];
+    if (arr.length === 0) break;
+    arr.splice(Math.max(0, Math.floor(arr.length * 0.75)), Math.max(1, arr.length - Math.floor(arr.length * 0.75)));
+  }
+  return { value: copy, truncated: true };
+}
+
 export interface ToolResult {
   [key: string]: unknown;
   content: { type: "text"; text: string }[];
@@ -133,7 +200,7 @@ export function asToolResult<A>(
 ): (args: A) => Promise<ToolResult> {
   return async (args: A) => {
     try {
-      const value = await handler(args);
+      const value = fitToCap(await handler(args), responseCap).value;
       const text = JSON.stringify(value, null, 2);
       return {
         content: [{ type: "text" as const, text }],
