@@ -22,6 +22,17 @@ export function capDeepPages(ctx: ToolContext, requested: number): { pages: numb
   return { pages: ctx.deepPageCap, capped: true };
 }
 
+/**
+ * Annotations for every tool here: each one only reads public pages, so it is
+ * read-only, never destructive, safe to repeat, and reaches the open web.
+ */
+export const READ_ONLY = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: true,
+} as const;
+
 /** Turns "/features/resume-parsing" into "resume-parsing". */
 export const slugOf = (path: string): string => path.split("/").filter(Boolean).pop() ?? "";
 
@@ -106,6 +117,7 @@ export function presentPage(
     ...(opts.includeFaqs !== false && page.faqs.length > 0 ? { faqs: page.faqs } : {}),
     ...(opts.includeLinks ? { internal_links: page.internal_links } : {}),
     source: "Public surhires.com page content (no authenticated ATS data).",
+    content_trust: "untrusted_web_content",
   };
 }
 

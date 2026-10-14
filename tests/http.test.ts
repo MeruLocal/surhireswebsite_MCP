@@ -53,6 +53,19 @@ describe("HTTP hardening (defaults)", () => {
     assert.equal(json.error.code, -32700);
   });
 
+  test("the manifest counts tools instead of listing them, without listChanged", async () => {
+    const res = await fetch(`${srv.base}/.well-known/mcp.json`);
+    assert.equal(res.headers.get("access-control-allow-origin"), "*");
+    const json = (await res.json()) as Record<string, any>;
+    assert.equal(json.tools, undefined);
+    assert.equal(json.capabilities.tools.listChanged, undefined);
+    const list = await fetch(`${srv.base}/mcp`, { method: "POST", headers: MCP_HEADERS, body: toolsList });
+    const text = await list.text();
+    const dataLine = text.split("\n").find((l) => l.startsWith("data: "));
+    const payload = JSON.parse(text.startsWith("{") ? text : dataLine!.slice("data: ".length));
+    assert.equal(json.tool_count, payload.result.tools.length);
+  });
+
   test("/version advertises the endpoint and transport", async () => {
     const json = (await (await fetch(`${srv.base}/version`)).json()) as Record<string, string>;
     assert.equal(json.endpoint, "/mcp");

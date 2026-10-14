@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { SERVER_VERSION } from "./version.js";
 
 /** Markets Surhires publishes localised pages for, verified from /sitemaps/markets.xml. */
 export const MARKETS = ["in", "us", "gb", "au"] as const;
@@ -91,6 +92,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   return {
     ...cfg,
     baseUrl: cfg.baseUrl.replace(/\/+$/, ""),
-    userAgent: `surhires-mcp/0.1.0 (+https://modelcontextprotocol.io; contact: ${cfg.contact})`,
+    userAgent: `surhires-mcp/${SERVER_VERSION} (+https://modelcontextprotocol.io; contact: ${cfg.contact})`,
   };
 }
