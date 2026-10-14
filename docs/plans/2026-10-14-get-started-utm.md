@@ -32,7 +32,7 @@
      - `pricing_url`: `/<market>/pricing`, tagged.
      - `contact`: the sales contact point from Organization JSON-LD, if present.
      - `signup_url` / `demo_url`: only if a matching path exists in the sitemap (e.g. a path under `/signup`, `/demo` or `/contact`). Otherwise omitted, with the note "No signup or demo page is published in the sitemap; use the pricing page or sales contact."
-     - `call_to_action`: one line, e.g. "Start with a 14-day trial from the pricing page, or contact sales."
+     - `call_to_action`: one line with **no trial length, price or plan name**, e.g. "See plans on the pricing page, or contact sales." *(Corrected 2026-10-14: the earlier example hard-coded "14-day trial", a trial term that would rot in code; see PR #11. A trial mention may be added only if read from the pricing page at call time.)*
    - Never invent a path: candidates must come from the sitemap.
 4. Update the README tool table and tool count (27 → 28), and `tests/tools.test.ts:72-89` (the expected tools list).
 
@@ -55,6 +55,8 @@
 - **Founder decision:** the tool name (`get_started` vs `surhires_get_started`).
 - Tagged URLs differ from canonical URLs, so agents may cite the UTM form. That is acceptable for attribution.
 - Contact data comes from the public Organization JSON-LD only. Nothing is hard-coded.
+- *(Added 2026-10-14)* Brand isolation (founder, 2026-10-14): every URL and contact `get_started` returns must be on Surhires hosts. `withUtm` only tags the configured origin, and the tool must never fall back to a group-wide contact address or booking link.
+- *(Added 2026-10-14)* Re-audit measured WARN `X.conversion_tool` (no get_started/demo/contact tool) and WARN `X.utm` (0/1 URLs in `get_pricing` output tagged), confirming both findings.
 
 ## Not checked
 
