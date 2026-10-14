@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { asToolResult } from "../utils/errors.js";
 import { limitArg, marketArg, offsetArg, paginate, queryArg, slugArg } from "../utils/validation.js";
 import {
+  capDeepPages,
   fetchAll,
   presentPage,
   rank,
@@ -71,7 +72,8 @@ export function registerCatalogTools(server: McpServer, ctx: ToolContext): void 
           };
         }
 
-        const window = items.slice(offset, offset + limit);
+        const budget = capDeepPages(ctx, limit);
+        const window = items.slice(offset, offset + budget.pages);
         const pages = await fetchAll(ctx, window.map((i) => i.path), market);
         const byPath = new Map(pages.map((p) => [slugOf(p.path), p]));
 
@@ -105,6 +107,7 @@ export function registerCatalogTools(server: McpServer, ctx: ToolContext): void 
           limit,
           returned: detailed.length,
           has_more: offset + window.length < items.length,
+          ...(budget.capped ? { detail_capped_to: budget.pages } : {}),
           results: detailed,
         };
       }),
@@ -188,10 +191,12 @@ export function registerCatalogTools(server: McpServer, ctx: ToolContext): void 
       const entries = await ctx.client.sectionPaths("/tools");
       if (!detail) return { total: entries.length, results: entries.map(toListing) };
 
-      const pages = await fetchAll(ctx, entries.map((e) => e.path), market);
+      const budget = capDeepPages(ctx, entries.length);
+      const pages = await fetchAll(ctx, entries.slice(0, budget.pages).map((e) => e.path), market);
       const bySlug = new Map(pages.map((p) => [slugOf(p.path), p]));
       return {
         total: entries.length,
+        ...(budget.capped ? { detail_capped_to: budget.pages } : {}),
         results: entries.map((e) => {
           const slug = slugOf(e.path);
           const page = bySlug.get(slug);

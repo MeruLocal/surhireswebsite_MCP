@@ -8,6 +8,18 @@ import { matchesAll, score, terms } from "../utils/validation.js";
 export interface ToolContext {
   client: SurhiresClient;
   defaultMarket: Market;
+  /**
+   * Most pages one call may fetch (deep search, detail=true lists). Set for the
+   * anonymous HTTP transport; unset over stdio, where each tool's own maximum
+   * applies.
+   */
+  deepPageCap?: number;
+}
+
+/** Applies the transport's per-call page budget to a requested page count. */
+export function capDeepPages(ctx: ToolContext, requested: number): { pages: number; capped: boolean } {
+  if (ctx.deepPageCap === undefined || requested <= ctx.deepPageCap) return { pages: requested, capped: false };
+  return { pages: ctx.deepPageCap, capped: true };
 }
 
 /** Turns "/features/resume-parsing" into "resume-parsing". */
