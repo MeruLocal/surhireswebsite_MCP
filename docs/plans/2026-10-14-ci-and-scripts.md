@@ -15,6 +15,7 @@
 1. **New `.github/workflows/ci.yml`:**
    - Triggers: `push` and `pull_request`; `ubuntu-latest`; `actions/setup-node` with `node-version: 22` and `cache: npm`.
    - Steps: `npm ci`, `npm run typecheck`, `npm run build`, `npm test`.
+   - *(Added 2026-10-14 re-audit, skill D4)* `npm audit --omit=dev --audit-level=high` (0 vulnerabilities on main today), and, once PRs #7 and #9 land, `node scripts/check-versions.mjs` and the brand-isolation grep.
    - Permissions: `contents: read`.
    - No live tests and no secrets.
 2. **`package.json` scripts:**
