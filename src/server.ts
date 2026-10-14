@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { loadConfig, type Config } from "./config.js";
 import { createLogger, type Logger } from "./utils/logger.js";
+import { setResponseCap } from "./utils/errors.js";
 import { SurhiresClient, type FetchLike } from "./clients/surhires-client.js";
 import { registerPageTools } from "./tools/pages.js";
 import { registerCatalogTools } from "./tools/catalog.js";
@@ -69,7 +70,13 @@ export function buildServer(options: BuildOptions = {}): {
     { instructions: INSTRUCTIONS, capabilities: { tools: {} } },
   );
 
-  const ctx: ToolContext = { client, defaultMarket: config.market, deepPageCap: options.deepPageCap };
+  setResponseCap(config.maxResponseChars);
+  const ctx: ToolContext = {
+    client,
+    defaultMarket: config.market,
+    deepPageCap: options.deepPageCap,
+    maxCharsLimit: config.maxCharsLimit,
+  };
 
   // Record tool names as they register, so callers (and the HTTP status page)
   // can report them without reaching into the SDK's internals.

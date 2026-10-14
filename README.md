@@ -55,9 +55,9 @@ Checked on **2026-10-13**. Every finding is reproducible with the command shown.
 
 | Tool | What it does |
 |---|---|
-| `list_features` / `get_feature` | ~45 feature pages (`detail=true` fetches real titles/descriptions) |
-| `list_integrations` / `get_integration` | ~40 connector pages |
-| `list_solutions` / `get_solution` | ~14 vertical/audience pages |
+| `list_features` / `get_feature` | Feature pages, read live from the sitemap (`detail=true` fetches real titles/descriptions) |
+| `list_integrations` / `get_integration` | Connector pages |
+| `list_solutions` / `get_solution` | Vertical/audience pages |
 | `list_free_tools` | Public calculators and generators Surhires hosts |
 
 ### Pricing and competitors
@@ -73,7 +73,7 @@ Checked on **2026-10-13**. Every finding is reproducible with the command shown.
 
 | Tool | What it does |
 |---|---|
-| `list_blog_posts` / `get_blog_post` / `search_blog` | ~33 posts; dates and author from `BlogPosting` |
+| `list_blog_posts` / `get_blog_post` / `search_blog` | Blog posts; dates and author from `BlogPosting` |
 | `list_resources` | Long-form guides under `/resources` |
 | `get_changelog` | Release policy (may be empty **by design** — see the tool's note) |
 | `get_roadmap` | `/roadmap` + `/whats-shipping`: what ships vs what is planned |
@@ -122,6 +122,8 @@ cp .env.example .env
 | `SURHIRES_CACHE_TTL_MS` | `900000` | Page cache TTL (0 disables) |
 | `SURHIRES_CACHE_MAX_ENTRIES` | `500` | Most pages held in the cache (least recently used evicted first) |
 | `SURHIRES_MAX_PAGE_BYTES` | `5242880` | Outbound pages larger than this are refused, not read |
+| `MCP_MAX_RESPONSE_CHARS` | `25000` | Largest tool result in characters; bigger ones are trimmed (longest text first) and flagged `response_truncated` |
+| `MCP_MAX_CHARS_LIMIT` | `25000` | Upper bound on every `max_chars` argument. Raise it together with `MCP_MAX_RESPONSE_CHARS` for clients that accept larger results |
 | `SURHIRES_CONTACT` | `unspecified` | Contact string in the User-Agent. **Must be a Surhires address** (or left unset): it reaches every proxy and log viewer between this server and the origin |
 | `LOG_LEVEL` | `info` | `error` \| `warn` \| `info` \| `debug` (stderr only) |
 | `PORT` / `MCP_HTTP_HOST` | `3000` / `127.0.0.1` | HTTP transport only |
@@ -380,7 +382,7 @@ surhires-mcp/
 - **The sitemap is the index.** No hardcoded page lists, so the catalogue cannot drift, and a slug is resolved against what is actually published rather than string-built — a tool cannot invent a URL.
 - **Robots compliance is enforced in code,** before any request, and checked both before and after market prefixing so `/api/x` cannot slip through as `/in/api/x`. There is a test for exactly that.
 - **Off-origin refusal.** `normalisePath` rejects any URL not on the configured origin, including `app.surhires.com`, so a crafted argument cannot make this an open proxy.
-- **Tools state their own epistemics.** Comparison pages return a `bias_note`; pricing returns `caveats` including that Surhires calls its own prices provisional; `get_integration_status` exists precisely because a published page does not mean a working connector.
+- **Tools state their own epistemics.** Comparison pages return a `bias_note`; pricing returns `caveats` quoted from the pricing page itself, each with its source (nothing the page does not say is asserted); `get_api_and_mcp_status` returns its static findings as dated claims beside the live page text; a failed page in a list or search is flagged (`detail_error`, `failed_count`, `pages_failed`) rather than silently dropped; `get_integration_status` exists precisely because a published page does not mean a working connector.
 - **Logs never touch stdout** (reserved for MCP framing) and redact any field whose key looks like a secret — defensive groundwork for a future authenticated client.
 
 ---
@@ -424,6 +426,10 @@ What is unavailable today, and what would unblock it.
 3. Add an authenticated client beside `src/clients/surhires-client.ts`; register its tools in `src/tools/`. The transports, config, error taxonomy, logging and test harness all carry over unchanged.
 
 ---
+
+## Maintenance
+
+- **Re-verify `STATUS_VERIFIED_ON` before 2027-01-12.** The static API/MCP status claims in `src/tools/company.ts` carry that date, and `tests/honest-results.test.ts` fails once it is more than 90 days old. Re-check each claim against Surhires' own pages, then bump the date; do not relax the test.
 
 ## Scope and good citizenship
 

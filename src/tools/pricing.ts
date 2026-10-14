@@ -2,7 +2,8 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { asToolResult, parseFailure } from "../utils/errors.js";
 import { limitArg, marketArg, offsetArg, paginate, slugArg } from "../utils/validation.js";
-import { presentPage, READ_ONLY, resolveSlug, slugOf, toListing, type ToolContext } from "./shared.js";
+import { failureText, presentPage, READ_ONLY, resolveSlug, slugOf, toListing, maxCharsArg, type ToolContext } from "./shared.js";
+import type { ExtractedPage } from "../clients/extract.js";
 import { ComparePricingOutput, CompetitorOutput, ListOutput, PricingOutput } from "./schemas.js";
 
 /**
@@ -11,23 +12,71 @@ import { ComparePricingOutput, CompetitorOutput, ListOutput, PricingOutput } fro
  * Plan figures come from the SoftwareApplication -> AggregateOffer -> Offer
  * JSON-LD on /<market>/pricing, which is the same data Surhires publishes to
  * search engines. Prices are market-specific (INR on /in, and so on), and the
- * site itself labels them provisional -- both facts are surfaced in the result
- * so a caller does not quote them as settled.
+ * terms that qualify them (provisional status, trial, tax) are quoted from the
+ * page itself with their source, never asserted from code.
  */
+
+/** Terms worth quoting when the pricing page states them. */
+const CAVEAT_TOPICS: RegExp[] = [/provisional/i, /\btrial\b/i, /\b(?:tax|gst|vat)\b/i, /free[- ]forever|free tier|free plan/i];
+
+const sentences = (text: string): string[] =>
+  text
+    .split(/(?<=[.!?])\s+/)
+    .map((s) => s.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+
+/**
+ * Caveats derived from the page at call time: the billing unit and currency
+ * from the Offer nodes, then any sentence on the page or in its FAQ that
+ * speaks to a qualifying term, quoted with where it came from. What the page
+ * does not say is omitted rather than asserted.
+ */
+export function pricingCaveats(page: ExtractedPage): ({ text: string; source: string } | string)[] {
+  const out: ({ text: string; source: string } | string)[] = [];
+  const pricing = page.pricing;
+  if (pricing) {
+    const units = [...new Set(pricing.plans.map((p) => p.unit).filter((u): u is string => Boolean(u)))];
+    const currency = pricing.currency ?? pricing.plans.find((p) => p.currency)?.currency;
+    if (currency || units.length > 0) {
+      out.push({
+        text: [currency ? `Prices are in ${currency}` : "Prices are", units.length > 0 ? `billed as published: ${units.join("; ")}` : ""]
+          .filter(Boolean)
+          .join(", ")
+          .concat("."),
+        source: "pricing page structured data",
+      });
+    }
+  }
+
+  const candidates: { text: string; source: string }[] = [
+    ...sentences(`${page.heading ?? ""}. ${page.body_text}`).map((text) => ({ text, source: "pricing page" })),
+    ...page.faqs.flatMap((f) => sentences(f.answer).map((text) => ({ text, source: "pricing FAQ" }))),
+  ];
+  const quoted = new Set<string>();
+  for (const topic of CAVEAT_TOPICS) {
+    const hit = candidates.find((c) => topic.test(c.text) && !quoted.has(c.text));
+    if (!hit) continue;
+    quoted.add(hit.text);
+    out.push({ text: hit.text.length > 300 ? `${hit.text.slice(0, 297)}...` : hit.text, source: hit.source });
+  }
+
+  out.push("Figures are market-specific. Pass a different market to compare.");
+  return out;
+}
 export function registerPricingTools(server: McpServer, ctx: ToolContext): void {
   server.registerTool(
     "get_pricing",
     {
       title: "Get Surhires pricing",
       description:
-        "Returns Surhires' published per-seat plans for a market: plan names, prices, currency, billing unit and what each plan is for, read from the pricing page's structured data. Also returns the page's pricing FAQ. Prices differ per market, and Surhires labels them provisional -- quote them as published-but-provisional, not final.",
+        "Returns Surhires' published per-seat plans for a market: plan names, prices, currency, billing unit and what each plan is for, read from the pricing page's structured data. Also returns the page's pricing FAQ, and caveats quoted from the page itself (each with its source). Prices differ per market; quote them as published, with the page's own caveats.",
       inputSchema: {
         market: marketArg,
         include_page_text: z
           .boolean()
           .default(false)
           .describe("Also return the pricing page prose, which covers what is and is not included."),
-        max_chars: z.coerce.number().int().min(200).max(60_000).default(6_000),
+        max_chars: maxCharsArg(ctx, 6_000),
       },
       annotations: READ_ONLY,
       outputSchema: PricingOutput,
@@ -50,13 +99,7 @@ export function registerPricingTools(server: McpServer, ctx: ToolContext): void 
         ...(include_page_text
           ? { page: presentPage(page, { maxChars: max_chars, includeFaqs: false }) }
           : {}),
-        // Static text, not read from the page: these sentences are fixed in code.
-        caveats: [
-          "Prices are per recruiter seat per month and exclude indirect tax.",
-          "The pricing page describes these figures as provisional.",
-          "Surhires publishes no free-forever tier; it offers a 14-day trial.",
-          "Figures are market-specific. Pass a different market to compare.",
-        ],
+        caveats: pricingCaveats(page),
         date_modified: page.date_modified,
       };
     }, { structured: true }),
@@ -89,27 +132,34 @@ export function registerPricingTools(server: McpServer, ctx: ToolContext): void 
         if (result.status === "rejected") {
           return {
             market,
-            error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+            error: failureText(result.reason),
           };
         }
         const { page } = result.value;
+        // Same rule as get_pricing: a page with no parsable offers is an error,
+        // not a market with zero plans.
+        if (!page.pricing || page.pricing.plans.length === 0) {
+          return {
+            market,
+            error: parseFailure(page.path, "any plan offers from the pricing page's structured data").message,
+          };
+        }
         return {
           market,
           path: page.path,
-          currency: page.pricing?.currency,
-          plans:
-            page.pricing?.plans.map((p) => ({
-              name: p.name,
-              price: p.price,
-              currency: p.currency,
-              unit: p.unit,
-            })) ?? [],
+          currency: page.pricing.currency,
+          plans: page.pricing.plans.map((p) => ({
+            name: p.name,
+            price: p.price,
+            currency: p.currency,
+            unit: p.unit,
+          })),
         };
       });
 
       return {
         by_market,
-        note: "Each market is priced in its own currency with no conversion applied. Surhires labels all of these figures provisional.",
+        note: "Each market is priced in its own currency with no conversion applied. Call get_pricing for one market to see the caveats its page states.",
       };
     }, { structured: true }),
   );
@@ -119,7 +169,7 @@ export function registerPricingTools(server: McpServer, ctx: ToolContext): void 
     {
       title: "List Surhires competitor comparisons",
       description:
-        "Lists the competitors Surhires publishes a head-to-head comparison page against -- Bullhorn, Greenhouse, Lever, Ceipal, Loxo, Manatal, Recruit CRM, Recruiterflow, Vincere, Zoho Recruit, JobAdder, Crelate, Tracker RMS. Also lists the 'alternatives to' pages where they exist.",
+        "Lists the competitors Surhires publishes a head-to-head comparison page against, read live from the sitemap. Also lists the 'alternatives to' pages where they exist; both lists page with limit/offset.",
       inputSchema: { limit: limitArg(50, 100), offset: offsetArg },
       annotations: READ_ONLY,
       outputSchema: ListOutput,
@@ -130,10 +180,13 @@ export function registerPricingTools(server: McpServer, ctx: ToolContext): void 
       const alternatives = index
         .filter((e) => /^\/alternatives-to-/.test(e.path))
         .map((e) => ({ path: e.path, competitor: e.path.replace("/alternatives-to-", "") }));
+      const altPage = paginate(alternatives, offset, limit);
 
       return {
         ...paginate(comparisons, offset, limit),
-        alternatives_pages: alternatives,
+        alternatives_pages: altPage.results,
+        alternatives_total: altPage.total,
+        alternatives_has_more: altPage.has_more,
         note: "Surhires writes these pages itself, so they are a vendor's own framing of a competitor. Each page's FAQ states when the competitor's pricing was last verified.",
       };
     }, { structured: true }),
@@ -148,7 +201,7 @@ export function registerPricingTools(server: McpServer, ctx: ToolContext): void 
       inputSchema: {
         competitor: slugArg.describe('Competitor slug, e.g. "bullhorn", "greenhouse", "zoho-recruit". Call list_competitor_comparisons for valid slugs.'),
         market: marketArg,
-        max_chars: z.coerce.number().int().min(200).max(100_000).default(12_000),
+        max_chars: maxCharsArg(ctx, 12_000),
       },
       annotations: READ_ONLY,
       outputSchema: CompetitorOutput,

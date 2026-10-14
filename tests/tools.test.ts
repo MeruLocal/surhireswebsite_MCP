@@ -236,7 +236,11 @@ describe("get_pricing", () => {
     assert.equal(pricing.plans[0].name, "Starter");
     assert.equal(pricing.plans[0].price, 3500);
     assert.equal(pricing.plans[0].unit, "per user per month, billed monthly");
-    assert.ok(pricing.caveats.some((c: string) => /provisional/.test(c)));
+    // Caveats are quoted from the page with their source, not asserted from code.
+    const provisional = pricing.caveats.find((c: { text?: string }) => /provisional/.test(c.text ?? ""));
+    assert.equal(provisional?.source, "pricing page");
+    const trial = pricing.caveats.find((c: { text?: string }) => /14-day trial/.test(c.text ?? ""));
+    assert.equal(trial?.source, "pricing FAQ");
     assert.equal(pricing.faqs.length, 1);
   });
 
@@ -384,7 +388,8 @@ describe("company and status tools", () => {
 
   test("get_api_and_mcp_status reports the verified absence of an API", async () => {
     const status = await call("get_api_and_mcp_status");
-    assert.ok(status.summary.some((s: string) => /No public REST API/.test(s)));
+    assert.ok(status.summary.some((s: { claim: string }) => /No public REST API/.test(s.claim)));
+    for (const entry of status.summary) assert.match(entry.verified_on, /^\d{4}-\d{2}-\d{2}$/);
     assert.match(status.what_this_means, /cannot search your candidates/);
     const mcpPage = status.pages.find((p: { path: string }) => p.path === "/in/mcp-server");
     assert.match(mcpPage.body_text, /planned, not shipping/);

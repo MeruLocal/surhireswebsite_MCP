@@ -20,6 +20,12 @@ const ConfigSchema = z.object({
   cacheMaxEntries: intFromEnv(500, 1, 100_000),
   // Outbound pages larger than this are refused rather than read into memory.
   maxPageBytes: intFromEnv(5 * 1024 * 1024, 1024, 100 * 1024 * 1024),
+  // Largest serialised tool result, in characters. Bigger results are trimmed
+  // (largest text field first, then the longest list) and flagged.
+  maxResponseChars: intFromEnv(25_000, 2_000, 1_000_000),
+  // Upper bound on every tool's max_chars argument. Raise it (with
+  // MCP_MAX_RESPONSE_CHARS) for stdio clients that accept larger results.
+  maxCharsLimit: intFromEnv(25_000, 200, 100_000),
   contact: z.string().default("unspecified"),
   logLevel: z.enum(["error", "warn", "info", "debug"]).default("info"),
   port: intFromEnv(3000, 1, 65_535),
@@ -75,6 +81,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     cacheTtlMs: env.SURHIRES_CACHE_TTL_MS,
     cacheMaxEntries: env.SURHIRES_CACHE_MAX_ENTRIES,
     maxPageBytes: env.SURHIRES_MAX_PAGE_BYTES,
+    maxResponseChars: env.MCP_MAX_RESPONSE_CHARS,
+    maxCharsLimit: env.MCP_MAX_CHARS_LIMIT,
     contact: env.SURHIRES_CONTACT,
     logLevel: env.LOG_LEVEL,
     port: env.PORT,

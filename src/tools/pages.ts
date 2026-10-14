@@ -9,7 +9,7 @@ import {
   paginate,
   queryArg,
 } from "../utils/validation.js";
-import { capDeepPages, fetchAll, presentPage, rank, READ_ONLY, slugOf, type ToolContext } from "./shared.js";
+import { assertSomeLoaded, capDeepPages, fetchAll, presentPage, rank, READ_ONLY, slugOf, maxCharsArg, type ToolContext } from "./shared.js";
 import { ListOutput } from "./schemas.js";
 
 const SECTIONS = [
@@ -82,13 +82,7 @@ export function registerPageTools(server: McpServer, ctx: ToolContext, baseUrl: 
           .min(1)
           .describe('Site path, e.g. "/features/resume-parsing" or "/pricing". A full surhires.com URL is also accepted.'),
         market: marketArg,
-        max_chars: z.coerce
-          .number()
-          .int()
-          .min(200)
-          .max(100_000)
-          .default(8_000)
-          .describe("Maximum characters of body text to return before truncating."),
+        max_chars: maxCharsArg(ctx, 8_000),
         include_links: z
           .boolean()
           .default(false)
@@ -165,10 +159,11 @@ export function registerPageTools(server: McpServer, ctx: ToolContext, baseUrl: 
         ...index.map((e) => e.path).filter((p) => !shallow.some((h) => h.path === p)),
       ].slice(0, budget.pages);
 
-      const pages = await fetchAll(ctx, prioritised);
+      const fetched = await fetchAll(ctx, prioritised);
+      assertSomeLoaded(fetched);
       const hits = rank(
         query,
-        pages.map((p) => ({
+        fetched.pages.map((p) => ({
           path: p.path,
           title: p.title,
           description: p.description,
@@ -181,7 +176,8 @@ export function registerPageTools(server: McpServer, ctx: ToolContext, baseUrl: 
         ...page,
         query,
         mode: "deep",
-        pages_scanned: pages.length,
+        pages_scanned: fetched.pages.length,
+        pages_failed: fetched.failed.length,
         ...(budget.capped ? { deep_max_pages_capped_to: budget.pages } : {}),
         ...(prioritised.length < index.length
           ? {
