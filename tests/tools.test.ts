@@ -97,6 +97,7 @@ describe("tool registration", () => {
       "compare_with_competitor",
       "get_api_and_mcp_status",
       "get_server_diagnostics",
+      "get_started",
     ]) {
       assert.ok(names.includes(expected), `missing tool ${expected}`);
     }

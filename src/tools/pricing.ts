@@ -4,6 +4,8 @@ import { asToolResult, parseFailure } from "../utils/errors.js";
 import { limitArg, marketArg, offsetArg, paginate, slugArg } from "../utils/validation.js";
 import { failureText, presentPage, READ_ONLY, resolveSlug, slugOf, toListing, maxCharsArg, type ToolContext } from "./shared.js";
 import type { ExtractedPage } from "../clients/extract.js";
+import { withUtm } from "../utils/utm.js";
+import type { Market } from "../config.js";
 import { ComparePricingOutput, CompetitorOutput, ListOutput, PricingOutput } from "./schemas.js";
 
 /**
@@ -63,6 +65,37 @@ export function pricingCaveats(page: ExtractedPage): ({ text: string; source: st
   out.push("Figures are market-specific. Pass a different market to compare.");
   return out;
 }
+/**
+ * The get_pricing payload for one market. Shared with the pricing resource so
+ * both always return the same data.
+ */
+export async function pricingResult(
+  ctx: ToolContext,
+  market: Market | undefined,
+  opts: { includePageText?: boolean; maxChars?: number; tool: string },
+): Promise<Record<string, unknown>> {
+  const page = await ctx.client.getPage("/pricing", market);
+  if (!page.pricing || page.pricing.plans.length === 0) {
+    throw parseFailure(page.path, "any plan offers from the pricing page's structured data");
+  }
+
+  return {
+    market: market ?? ctx.defaultMarket,
+    path: page.path,
+    url: withUtm(page.url, opts.tool, ctx.baseUrl),
+    currency: page.pricing.currency,
+    price_range: { low: page.pricing.low_price, high: page.pricing.high_price },
+    plan_count: page.pricing.plan_count ?? page.pricing.plans.length,
+    plans: page.pricing.plans,
+    faqs: page.faqs,
+    ...(opts.includePageText
+      ? { page: presentPage(page, { maxChars: opts.maxChars ?? 6_000, includeFaqs: false, utm: { ctx, tool: opts.tool } }) }
+      : {}),
+    caveats: pricingCaveats(page),
+    date_modified: page.date_modified,
+  };
+}
+
 export function registerPricingTools(server: McpServer, ctx: ToolContext): void {
   server.registerTool(
     "get_pricing",
@@ -81,28 +114,9 @@ export function registerPricingTools(server: McpServer, ctx: ToolContext): void 
       annotations: READ_ONLY,
       outputSchema: PricingOutput,
     },
-    asToolResult(async ({ market, include_page_text, max_chars }) => {
-      const page = await ctx.client.getPage("/pricing", market);
-      if (!page.pricing || page.pricing.plans.length === 0) {
-        throw parseFailure(page.path, "any plan offers from the pricing page's structured data");
-      }
-
-      return {
-        market: market ?? ctx.defaultMarket,
-        path: page.path,
-        url: page.url,
-        currency: page.pricing.currency,
-        price_range: { low: page.pricing.low_price, high: page.pricing.high_price },
-        plan_count: page.pricing.plan_count ?? page.pricing.plans.length,
-        plans: page.pricing.plans,
-        faqs: page.faqs,
-        ...(include_page_text
-          ? { page: presentPage(page, { maxChars: max_chars, includeFaqs: false }) }
-          : {}),
-        caveats: pricingCaveats(page),
-        date_modified: page.date_modified,
-      };
-    }, { structured: true }),
+    asToolResult(async ({ market, include_page_text, max_chars }) =>
+      pricingResult(ctx, market, { includePageText: include_page_text, maxChars: max_chars, tool: "get_pricing" }),
+    { structured: true }),
   );
 
   server.registerTool(
@@ -211,7 +225,7 @@ export function registerPricingTools(server: McpServer, ctx: ToolContext): void 
       const page = await ctx.client.getPage(path, market);
       return {
         competitor: slugOf(path),
-        ...presentPage(page, { maxChars: max_chars }),
+        ...presentPage(page, { maxChars: max_chars, utm: { ctx, tool: "compare_with_competitor" } }),
         bias_note:
           "Authored by Surhires about a competitor. Verify any competitor pricing or packaging claim against that vendor's own site before relying on it.",
       };

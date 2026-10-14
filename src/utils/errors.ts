@@ -179,6 +179,12 @@ export function fitToCap(value: unknown, cap: number): { value: unknown; truncat
   return { value: copy, truncated: true };
 }
 
+/**
+ * The error kind of each failed result, for the usage log. Kept beside the
+ * result (not in it) so nothing extra reaches the caller.
+ */
+export const errorKinds = new WeakMap<object, ErrorKind | "internal">();
+
 export interface ToolResult {
   [key: string]: unknown;
   content: { type: "text"; text: string }[];
@@ -208,7 +214,9 @@ export function asToolResult<A>(
       };
     } catch (error) {
       if (error instanceof SurhiresError) {
-        return { content: [{ type: "text" as const, text: error.toText() }], isError: true };
+        const result = { content: [{ type: "text" as const, text: error.toText() }], isError: true };
+        errorKinds.set(result, error.kind);
+        return result;
       }
       // Anything else is a bug or an internal failure: its message may carry
       // internals, so it goes to the operator log (stderr) and the caller gets
@@ -221,7 +229,7 @@ export function asToolResult<A>(
           detail: error instanceof Error ? error.message : String(error),
         })}\n`,
       );
-      return {
+      const result = {
         content: [
           {
             type: "text" as const,
@@ -230,6 +238,8 @@ export function asToolResult<A>(
         ],
         isError: true,
       };
+      errorKinds.set(result, "internal");
+      return result;
     }
   };
 }

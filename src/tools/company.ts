@@ -5,6 +5,7 @@ import { extractOrganization } from "../clients/extract.js";
 import { marketArg } from "../utils/validation.js";
 import { failureText, presentPage, READ_ONLY, slugOf, maxCharsArg, type ToolContext } from "./shared.js";
 import { limitArg, offsetArg, paginate } from "../utils/validation.js";
+import { withUtm } from "../utils/utm.js";
 import { ListOutput } from "./schemas.js";
 
 /**
@@ -90,6 +91,65 @@ export function registerCompanyTools(server: McpServer, ctx: ToolContext): void 
   );
 
   server.registerTool(
+    "get_started",
+    {
+      title: "Where to start with Surhires",
+      description:
+        "Gives a person who wants to try or buy Surhires the right next step: the pricing page for their market, the sales contact Surhires publishes, and a signup or demo page if the site publishes one. Every link is read from the live site (sitemap and Organization data), never invented. Call this when a user is ready to evaluate or buy.",
+      inputSchema: { market: marketArg },
+      annotations: READ_ONLY,
+    },
+    asToolResult(async ({ market }) => {
+      const m = market ?? ctx.defaultMarket;
+      const index = await ctx.client.getSiteIndex();
+      const published = new Set(index.map((e) => e.path));
+      const link = (path: string) => withUtm(`${ctx.baseUrl}${ctx.client.marketPath(path, m)}`, "get_started", ctx.baseUrl);
+
+      // Only paths the sitemap actually lists; a candidate is never built from a guess.
+      const find = (pattern: RegExp) => index.find((e) => pattern.test(e.path))?.path;
+      const signup = find(/^\/(?:signup|sign-up|get-started|start-trial|trial)(?:\/|$)/);
+      const demo = find(/^\/(?:demo|book-a-demo|request-a-demo)(?:\/|$)/);
+      const contactPage = find(/^\/(?:contact|contact-us|contact-sales)(?:\/|$)/);
+
+      // The sales contact from the site's own Organization data. Email addresses
+      // are kept only on the Surhires domain, so no other brand's address can
+      // leak through.
+      let contact: Record<string, unknown> | undefined;
+      let contactError: string | undefined;
+      try {
+        const org = extractOrganization(await ctx.client.getText("/", m));
+        const points = Array.isArray(org?.contactPoint) ? (org.contactPoint as Record<string, unknown>[]) : [];
+        const sales = points.find((c) => typeof c.contactType === "string" && /sales/i.test(c.contactType)) ?? points[0];
+        if (sales) {
+          const siteDomain = new URL(ctx.baseUrl).hostname.replace(/^www\./, "");
+          const email = typeof sales.email === "string" && sales.email.toLowerCase().endsWith(`@${siteDomain}`) ? sales.email : undefined;
+          contact = {
+            type: sales.contactType,
+            ...(typeof sales.telephone === "string" ? { telephone: sales.telephone } : {}),
+            ...(email ? { email } : {}),
+          };
+        }
+      } catch (error) {
+        contactError = failureText(error);
+      }
+
+      return {
+        market: m,
+        ...(published.has("/pricing") ? { pricing_url: link("/pricing") } : {}),
+        ...(contact ? { contact } : {}),
+        ...(contactError ? { contact_error: contactError } : {}),
+        ...(signup ? { signup_url: link(signup) } : {}),
+        ...(demo ? { demo_url: link(demo) } : {}),
+        ...(contactPage ? { contact_url: link(contactPage) } : {}),
+        ...(!signup && !demo
+          ? { note: "No signup or demo page is published in the sitemap; use the pricing page or sales contact." }
+          : {}),
+        call_to_action: "See plans on the pricing page, or contact sales.",
+      };
+    }),
+  );
+
+  server.registerTool(
     "get_api_and_mcp_status",
     {
       title: "Check whether Surhires offers an API, MCP server or Zapier app",
@@ -112,7 +172,7 @@ export function registerCompanyTools(server: McpServer, ctx: ToolContext): void 
         summary_note: "Dated findings from the last manual verification. The live page text in `pages` wins on any conflict.",
         pages: settled.map((result, i) =>
           result.status === "fulfilled"
-            ? presentPage(result.value, { maxChars: max_chars })
+            ? presentPage(result.value, { maxChars: max_chars, utm: { ctx, tool: "get_api_and_mcp_status" } })
             : {
                 path: ctx.client.marketPath(targets[i]!, market),
                 error: failureText(result.reason),
@@ -201,7 +261,7 @@ export function registerCompanyTools(server: McpServer, ctx: ToolContext): void 
       return {
         pages: settled.map((result, i) =>
           result.status === "fulfilled"
-            ? presentPage(result.value, { maxChars: max_chars })
+            ? presentPage(result.value, { maxChars: max_chars, utm: { ctx, tool: "get_trust_and_security" } })
             : {
                 path: ctx.client.marketPath(targets[i]!, market),
                 error: failureText(result.reason),

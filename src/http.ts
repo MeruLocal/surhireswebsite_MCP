@@ -241,7 +241,7 @@ async function main(): Promise<void> {
             authentication: { required: false, note: "No API key is required and none should be sent." },
             // The tool set is fixed at build and this transport is stateless, so
             // no list-changed notification is ever sent.
-            capabilities: { tools: {} },
+            capabilities: { tools: {}, resources: {}, prompts: {} },
             tool_count: listToolNames(config, client).length,
             documentation: "/",
           },

@@ -40,7 +40,7 @@ Checked on **2026-10-13**. Every finding is reproducible with the command shown.
 
 ## 2. Supported tools
 
-27 tools, all read-only. The "reads" column is the actual page or data source — no tool calls anything undocumented.
+28 tools, all read-only, plus two resources and one prompt (below). The "reads" column is the actual page or data source — no tool calls anything undocumented.
 
 ### Discovery and search
 
@@ -88,6 +88,21 @@ Checked on **2026-10-13**. Every finding is reproducible with the command shown.
 | `get_trust_and_security` | `/security` + `/trust-center` |
 | `list_legal_documents` | Terms, privacy, DPA, GDPR, DPDPA, CCPA, EEO/OFCCP and the rest |
 | `get_server_diagnostics` | This server's config, cache state and live reachability |
+| `get_started` | The next step for someone ready to try or buy: the market's pricing page, the published sales contact, and a signup/demo page only if the sitemap lists one |
+
+Links back to the Surhires site in results (`url`, `pricing_url`, …) carry `utm_source=mcp&utm_medium=ai_agent&utm_campaign=<tool>`, so agent-referred visits show up in analytics. `path` fields stay untagged; links to other hosts are never tagged.
+
+### Resources and prompts
+
+| Kind | Name | What it gives |
+|---|---|---|
+| Resource | `surhires://pricing/{market}` | The `get_pricing` result for one market (`in`, `us`, `gb`, `au`) |
+| Resource | `surhires://features` | Every published feature page, from the sitemap |
+| Prompt | `recommend_plan` (`team_size`, `market`) | Walks the model through `get_pricing`, `list_features` and `get_started`; states no price or term itself |
+
+### Usage log
+
+Every tool call writes one JSON line to stderr: `{"msg":"tool_call","tool","ok","ms","error_kind"?,"client"?}`. Arguments and results are never logged, because a query can carry a user's own words. Where those logs are shipped, and for how long they are kept, is a deployment decision.
 
 ### Tools deliberately **not** implemented
 
@@ -176,7 +191,7 @@ Use an **absolute path** to `dist/index.js`, with escaped backslashes on Windows
 
 ### Verify Claude discovered the tools
 
-1. Open Claude Desktop → the tools/plug icon in the message composer → `surhires` should list **27 tools**.
+1. Open Claude Desktop → the tools/plug icon in the message composer → `surhires` should list **28 tools**.
 2. Ask: *"Use get_server_diagnostics to check the Surhires server."* Expect `surhires_reachable: true` and a non-zero `pages_in_sitemap`.
 3. If it does not appear, check the MCP log:
    - Windows: `%APPDATA%\Claude\logs\mcp-server-surhires.log`
@@ -308,7 +323,7 @@ SURHIRES_LIVE=1 npm run test:live   # 10 tests against the real site
 - `extract.test.ts` — JSON-LD flattening, malformed-block tolerance, entity decoding, FAQ extraction, `AggregateOffer`/`Offer` parsing, breadcrumbs, table parsing, nav/footer/script exclusion, meta fallbacks.
 - `client.test.ts` — market prefixing (including sitemap exemptions and no double-prefixing), the robots `/api/` refusal, cache hits, request coalescing, TTL=0, 404 mapping, 500 retry-then-succeed, 429 with `Retry-After`, timeouts, network failures, sitemap merge with one file down, malformed sitemap entries, concurrency ceiling.
 - `validation.test.ts` — path normalisation, **refusal of other hosts including `app.surhires.com`**, traversal resolution, keyword matching, pagination edges, config defaults and rejections.
-- `tools.test.ts` — all 27 tools end to end through a real MCP client over an in-memory transport: registration, pagination, truncation, market override, every error path, and two guard tests asserting no request ever went to `/api/` and no fake ATS tool is advertised.
+- `tools.test.ts` — all 28 tools end to end through a real MCP client over an in-memory transport: registration, pagination, truncation, market override, every error path, and two guard tests asserting no request ever went to `/api/` and no fake ATS tool is advertised.
 
 **Live (10 tests, all passing on 2026-10-13).** Real GETs: sitemap size >100, pricing offers still present, feature page yields body + FAQs, comparison tables, `Organization` data, status pages still saying "not shipped", robots guard against the real origin, market currencies differing, deep search, blog dates.
 
@@ -322,9 +337,9 @@ One live test is a **tripwire**: if the status pages stop saying "planned / in d
 2. `npm run typecheck` — clean
 3. `npm test` — 108 passing
 4. `SURHIRES_LIVE=1 npm run test:live` — 10 passing (needs network)
-5. stdio smoke test above — 27 tools
+5. stdio smoke test above — 28 tools
 6. `npm run start:http` then `curl http://127.0.0.1:3000/health`
-7. Claude Desktop shows 27 tools; `get_server_diagnostics` reports reachable
+7. Claude Desktop shows 28 tools; `get_server_diagnostics` reports reachable
 
 ### Troubleshooting
 

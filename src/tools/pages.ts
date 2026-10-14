@@ -93,7 +93,7 @@ export function registerPageTools(server: McpServer, ctx: ToolContext, baseUrl: 
     asToolResult(async ({ path, market, max_chars, include_links }) => {
       const clean = normalisePath(path, baseUrl);
       const page = await ctx.client.getPage(clean, market);
-      return presentPage(page, { maxChars: max_chars, includeLinks: include_links });
+      return presentPage(page, { maxChars: max_chars, includeLinks: include_links, utm: { ctx, tool: "get_page" } });
     }),
   );
 
