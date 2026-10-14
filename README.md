@@ -120,9 +120,16 @@ cp .env.example .env
 | `SURHIRES_MAX_RETRIES` | `2` | Retries on 429/5xx/network/timeout |
 | `SURHIRES_MAX_CONCURRENCY` | `4` | Parallel requests cap |
 | `SURHIRES_CACHE_TTL_MS` | `900000` | Page cache TTL (0 disables) |
+| `SURHIRES_CACHE_MAX_ENTRIES` | `500` | Most pages held in the cache (least recently used evicted first) |
+| `SURHIRES_MAX_PAGE_BYTES` | `5242880` | Outbound pages larger than this are refused, not read |
 | `SURHIRES_CONTACT` | `unspecified` | Contact string in the User-Agent. **Must be a Surhires address** (or left unset): it reaches every proxy and log viewer between this server and the origin |
 | `LOG_LEVEL` | `info` | `error` \| `warn` \| `info` \| `debug` (stderr only) |
 | `PORT` / `MCP_HTTP_HOST` | `3000` / `127.0.0.1` | HTTP transport only |
+| `MCP_RATE_LIMIT_PER_MIN` | `60` | HTTP only: `POST /mcp` requests per minute per client (`0` disables); over it, `429` with `Retry-After` |
+| `TRUST_PROXY` | unset (`0`) | HTTP only: the number of trusted reverse-proxy hops in front of this server. `0` keys the rate limit on the socket address; `N` keys on the Nth `X-Forwarded-For` entry from the right (fewer entries falls back to the socket). Legacy `true`/`1` mean `1`. Behind Cloudflare then Apache use `2`, or configure Apache `mod_remoteip` with Cloudflare's ranges and use `1`. `CF-Connecting-IP` is not trusted. Leave unset when nothing sits in front, or a caller can choose its own key |
+| `MCP_HTTP_DEEP_MAX_PAGES` | `10` | HTTP only: most pages one tool call may fetch (deep search, `detail=true` lists). Stdio keeps each tool's own maximum |
+| `MCP_ALLOWED_ORIGINS` | unset | HTTP only: extra browser `Origin`s allowed to call `/mcp`, comma-separated (`*` = any). Requests without an `Origin` (non-browser clients) are unaffected |
+| `MCP_PUBLIC_BASE_URL` | unset | HTTP only: the public `https://` origin advertised on `/` and in `/.well-known/mcp.json`, e.g. `https://mcp.surhires.com`. Never taken from the request's `Host` |
 
 **There is no credential setting, and that is deliberate** — adding one would imply an authenticated surface that does not exist.
 
@@ -185,14 +192,14 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol
 npm run start:http
 ```
 
-Stateless (a fresh server per request), bound to `127.0.0.1` with DNS-rebinding protection on. Connect it as a custom/remote MCP server at `http://127.0.0.1:3000/mcp`.
+Stateless (a fresh server per request, sharing one page cache and outbound connection limit), bound to `127.0.0.1` with DNS-rebinding protection on. Abuse limits: browser `Origin` allowlist (403), a per-client rate limit (429), a 1 MB request body cap (413), malformed JSON answered with `400`/`-32700`, and a per-call page budget on fan-out tools. Outbound redirects are followed only within the Surhires origin. Connect it as a custom/remote MCP server at `http://127.0.0.1:3000/mcp`.
 
 | Route | Method | Purpose |
 |---|---|---|
 | `/mcp` | POST | The MCP endpoint (JSON-RPC). A browser GET gets the landing page instead; an SSE GET gets 405, since a stateless server has no standalone stream |
 | `/` | GET | Human-readable landing page: scope, endpoints, live tool list |
 | `/health` | GET | Liveness JSON (`/healthz` kept as an alias) |
-| `/version` | GET | `{"name","version"}` |
+| `/version` | GET | `{"name","version","endpoint","transport"}` |
 | `/.well-known/mcp.json` | GET | Discovery document: transport, auth (none), tool list |
 
 ### Docker
@@ -214,11 +221,16 @@ Multi-stage: dev dependencies are installed to compile TypeScript, then discarde
 | Variable | Why |
 |---|---|
 | `MCP_HTTP_HOST` | Defaults to `0.0.0.0` in the image. Binding to `127.0.0.1` inside a container gives you a process that looks healthy and answers nothing from outside it |
+| `TRUST_PROXY` | Behind a reverse proxy every caller arrives from the proxy's address and would share one rate-limit bucket. Set it to the number of proxy hops (`1` for one proxy; `2` for Cloudflare then Apache) there, and only there |
+| `MCP_PUBLIC_BASE_URL` | The public URL shown on the status page and in the discovery document; otherwise they point at `127.0.0.1` |
 | `MCP_ALLOWED_HOSTS` | The transport rejects an unrecognised `Host` header (DNS-rebinding protection). Behind a proxy or a published name the Host is **not** localhost, so list it or every request gets **403**. Comma-separated; `*` disables the check, for a trusted network only |
 
 ```bash
+# TRUST_PROXY is the number of proxy hops (2 behind Cloudflare then Apache).
 docker run --rm -p 8080:3000 \
   -e MCP_ALLOWED_HOSTS=mcp.example.com,mcp.example.com:443 \
+  -e MCP_PUBLIC_BASE_URL=https://mcp.example.com \
+  -e TRUST_PROXY=1 \
   -e SURHIRES_CONTACT=you@example.com \
   surhires-mcp
 ```

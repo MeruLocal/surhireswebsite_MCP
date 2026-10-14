@@ -12,6 +12,7 @@ import {
   sortArg,
 } from "../utils/validation.js";
 import {
+  capDeepPages,
   fetchAll,
   presentPage,
   rank,
@@ -73,7 +74,8 @@ export function registerContentTools(server: McpServer, ctx: ToolContext): void 
         };
       }
 
-      const window = items.slice(offset, offset + limit);
+      const budget = capDeepPages(ctx, limit);
+      const window = items.slice(offset, offset + budget.pages);
       const pages = await fetchAll(ctx, window.map((i) => i.path), market);
       const bySlug = new Map(pages.map((p) => [slugOf(p.path), p]));
 
@@ -108,6 +110,7 @@ export function registerContentTools(server: McpServer, ctx: ToolContext): void 
         returned: detailed.length,
         has_more: offset + window.length < items.length,
         sort,
+        ...(budget.capped ? { detail_capped_to: budget.pages } : {}),
         results: detailed,
         note:
           sort === "path"
@@ -178,10 +181,11 @@ export function registerContentTools(server: McpServer, ctx: ToolContext): void 
         };
       }
 
+      const budget = capDeepPages(ctx, deep_max_posts);
       const prioritised = [
         ...shallow.map((h) => h.path),
         ...entries.map((e) => e.path).filter((p) => !shallow.some((h) => h.path === p)),
-      ].slice(0, deep_max_posts);
+      ].slice(0, budget.pages);
 
       const pages = await fetchAll(ctx, prioritised, market);
       const hits = rank(
@@ -195,6 +199,7 @@ export function registerContentTools(server: McpServer, ctx: ToolContext): void 
         mode: "deep",
         posts_scanned: pages.length,
         total_posts: entries.length,
+        ...(budget.capped ? { deep_max_posts_capped_to: budget.pages } : {}),
       };
     }),
   );
@@ -213,10 +218,17 @@ export function registerContentTools(server: McpServer, ctx: ToolContext): void 
       if (!detail) {
         return { total: entries.length, results: entries.map((e) => ({ slug: slugOf(e.path), path: e.path })) };
       }
-      const pages = await fetchAll(ctx, entries.map((e) => e.path), market);
+      const budget = capDeepPages(ctx, entries.length);
+      const pages = await fetchAll(ctx, entries.slice(0, budget.pages).map((e) => e.path), market);
       const bySlug = new Map(pages.map((p) => [slugOf(p.path), p]));
       return {
         total: entries.length,
+        ...(budget.capped
+          ? {
+              detail_capped_to: budget.pages,
+              note: `Details were fetched for the first ${budget.pages} guides only (per-call page cap). Read any other one with get_page.`,
+            }
+          : {}),
         results: entries.map((e) => {
           const slug = slugOf(e.path);
           const page = bySlug.get(slug);

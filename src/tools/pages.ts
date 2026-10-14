@@ -9,7 +9,7 @@ import {
   paginate,
   queryArg,
 } from "../utils/validation.js";
-import { fetchAll, presentPage, rank, slugOf, type ToolContext } from "./shared.js";
+import { capDeepPages, fetchAll, presentPage, rank, slugOf, type ToolContext } from "./shared.js";
 
 const SECTIONS = [
   "features",
@@ -157,10 +157,11 @@ export function registerPageTools(server: McpServer, ctx: ToolContext, baseUrl: 
 
       // Deep mode: scan the shallow winners first, then fill up to the budget
       // with the rest of the section so a non-title match is still reachable.
+      const budget = capDeepPages(ctx, deep_max_pages);
       const prioritised = [
         ...shallow.map((h) => h.path),
         ...index.map((e) => e.path).filter((p) => !shallow.some((h) => h.path === p)),
-      ].slice(0, deep_max_pages);
+      ].slice(0, budget.pages);
 
       const pages = await fetchAll(ctx, prioritised);
       const hits = rank(
@@ -179,8 +180,13 @@ export function registerPageTools(server: McpServer, ctx: ToolContext, baseUrl: 
         query,
         mode: "deep",
         pages_scanned: pages.length,
+        ...(budget.capped ? { deep_max_pages_capped_to: budget.pages } : {}),
         ...(prioritised.length < index.length
-          ? { note: `Scanned ${prioritised.length} of ${index.length} pages. Raise deep_max_pages or narrow with section to cover more.` }
+          ? {
+              note: budget.capped
+                ? `Scanned ${prioritised.length} of ${index.length} pages (this endpoint caps deep search at ${budget.pages} pages per call). Narrow with section or a more specific query to cover more.`
+                : `Scanned ${prioritised.length} of ${index.length} pages. Raise deep_max_pages or narrow with section to cover more.`,
+            }
           : {}),
       };
     }),

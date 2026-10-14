@@ -4,6 +4,9 @@ import {
   blockedByRobots,
   networkFailure,
   notFound,
+  offOriginRedirect,
+  pageTooLarge,
+  tooManyRedirects,
   rateLimited,
   timedOut,
   upstreamFailure,
@@ -43,13 +46,19 @@ interface CacheEntry {
 
 export type FetchLike = (
   input: string,
-  init?: { headers?: Record<string, string>; signal?: AbortSignal; redirect?: "follow" },
+  init?: { headers?: Record<string, string>; signal?: AbortSignal; redirect?: "follow" | "manual" },
 ) => Promise<{
   ok: boolean;
   status: number;
   text: () => Promise<string>;
   headers: { get: (name: string) => string | null };
+  /** A WHATWG stream when the fetch implementation provides one; read with a size cap. */
+  body?: { getReader: () => { read: () => Promise<{ done: boolean; value?: Uint8Array }>; cancel: () => Promise<void> } } | null;
 }>;
+
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+const MAX_REDIRECTS = 5;
+const MARKET_PREFIX = /^\/(?:in|us|gb|au)(?=\/)/;
 
 export interface SitemapEntry {
   path: string;
@@ -104,13 +113,19 @@ export class SurhiresClient {
     // cannot slip through disguised as "/in/api/x".
     this.assertAllowed(path);
     const target = this.marketPath(path, market);
-    this.assertAllowed(target.replace(/^\/(?:in|us|gb|au)(?=\/)/, ""));
+    this.assertAllowed(target.replace(MARKET_PREFIX, ""));
     this.assertAllowed(target);
 
     const cached = this.cache.get(target);
-    if (cached && Date.now() - cached.storedAt < this.config.cacheTtlMs) {
-      this.log.debug("cache hit", { path: target });
-      return cached.html;
+    if (cached) {
+      if (Date.now() - cached.storedAt < this.config.cacheTtlMs) {
+        // LRU: re-insert so this entry becomes the most recently used.
+        this.cache.delete(target);
+        this.cache.set(target, cached);
+        this.log.debug("cache hit", { path: target });
+        return cached.html;
+      }
+      this.cache.delete(target);
     }
 
     // Coalesce concurrent callers asking for the same page.
@@ -119,7 +134,7 @@ export class SurhiresClient {
 
     const request = this.withSlot(() => this.fetchWithRetry(target))
       .then((html) => {
-        if (this.config.cacheTtlMs > 0) this.cache.set(target, { html, storedAt: Date.now() });
+        if (this.config.cacheTtlMs > 0) this.remember(target, html);
         return html;
       })
       .finally(() => this.inFlight.delete(target));
@@ -128,8 +143,18 @@ export class SurhiresClient {
     return request;
   }
 
+  /** Stores a page, evicting the least recently used entries past the bound. */
+  private remember(target: string, html: string): void {
+    this.cache.delete(target);
+    this.cache.set(target, { html, storedAt: Date.now() });
+    while (this.cache.size > this.config.cacheMaxEntries) {
+      const oldest = this.cache.keys().next().value;
+      if (oldest === undefined) break;
+      this.cache.delete(oldest);
+    }
+  }
+
   private async fetchWithRetry(path: string): Promise<string> {
-    const url = `${this.config.baseUrl}${path}`;
     let lastError: unknown;
 
     for (let attempt = 0; attempt <= this.config.maxRetries; attempt += 1) {
@@ -142,17 +167,7 @@ export class SurhiresClient {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.config.timeoutMs);
       try {
-        const started = Date.now();
-        const response = await this.fetchImpl(url, {
-          headers: {
-            "user-agent": this.config.userAgent,
-            accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "accept-language": "en",
-          },
-          signal: controller.signal,
-          redirect: "follow",
-        });
-        this.log.debug("fetched", { path, status: response.status, ms: Date.now() - started });
+        const response = await this.fetchFollowingRedirects(path, controller.signal);
 
         if (response.status === 404) throw notFound(path);
         if (response.status === 429) {
@@ -166,7 +181,7 @@ export class SurhiresClient {
         }
         if (!response.ok) throw upstreamFailure(path, response.status);
 
-        return await response.text();
+        return await this.readCapped(path, response);
       } catch (error) {
         if (error instanceof Error && error.name === "AbortError") {
           lastError = timedOut(path, this.config.timeoutMs);
@@ -174,13 +189,84 @@ export class SurhiresClient {
         }
         // Errors we raised deliberately are final; transport errors get a retry.
         if (error instanceof Error && error.name === "SurhiresError") throw error;
-        lastError = networkFailure(path, error instanceof Error ? error.message : String(error));
+        // The raw message can name hosts or resolver detail: log it, do not return it.
+        this.log.warn("network failure", { path, detail: error instanceof Error ? error.message : String(error) });
+        lastError = networkFailure(path);
       } finally {
         clearTimeout(timer);
       }
     }
 
-    throw lastError ?? networkFailure(path, "exhausted retries");
+    throw lastError ?? networkFailure(path);
+  }
+
+  /**
+   * Follows redirects by hand so every hop stays on the configured origin and
+   * passes the robots check. A redirect elsewhere is refused before any request
+   * is made to the other host.
+   */
+  private async fetchFollowingRedirects(path: string, signal: AbortSignal) {
+    const origin = new URL(this.config.baseUrl);
+    let url = new URL(`${this.config.baseUrl}${path}`);
+
+    for (let hop = 0; ; hop += 1) {
+      const started = Date.now();
+      const response = await this.fetchImpl(url.toString(), {
+        headers: {
+          "user-agent": this.config.userAgent,
+          accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "accept-language": "en",
+        },
+        signal,
+        redirect: "manual",
+      });
+      this.log.debug("fetched", { path: url.pathname, status: response.status, ms: Date.now() - started });
+
+      if (!REDIRECT_STATUSES.has(response.status)) return response;
+      if (hop >= MAX_REDIRECTS) throw tooManyRedirects(path);
+
+      const location = response.headers.get("location");
+      if (!location) return response;
+      // Release the redirect response's body before the next hop.
+      await response.body?.getReader?.().cancel().catch(() => undefined);
+      const next = new URL(location, url);
+      if (next.protocol !== origin.protocol || next.host !== origin.host) throw offOriginRedirect(path);
+      this.assertAllowed(next.pathname);
+      this.assertAllowed(next.pathname.replace(MARKET_PREFIX, ""));
+      url = next;
+    }
+  }
+
+  /** Reads a response body, refusing anything over SURHIRES_MAX_PAGE_BYTES. */
+  private async readCapped(
+    path: string,
+    response: Awaited<ReturnType<FetchLike>>,
+  ): Promise<string> {
+    const max = this.config.maxPageBytes;
+    const declared = Number(response.headers.get("content-length"));
+    if (Number.isFinite(declared) && declared > max) throw pageTooLarge(path, max);
+
+    const reader = response.body?.getReader?.();
+    if (!reader) {
+      const text = await response.text();
+      if (Buffer.byteLength(text, "utf8") > max) throw pageTooLarge(path, max);
+      return text;
+    }
+
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      size += value.byteLength;
+      if (size > max) {
+        await reader.cancel().catch(() => undefined);
+        throw pageTooLarge(path, max);
+      }
+      chunks.push(value);
+    }
+    return Buffer.concat(chunks).toString("utf8");
   }
 
   /** Fetches and structurally extracts a page. */
@@ -259,8 +345,8 @@ export class SurhiresClient {
     return index.filter((e) => e.path.startsWith(prefix) && e.path.slice(prefix.length) !== "");
   }
 
-  cacheStats(): { entries: number; ttl_ms: number } {
-    return { entries: this.cache.size, ttl_ms: this.config.cacheTtlMs };
+  cacheStats(): { entries: number; ttl_ms: number; max_entries: number } {
+    return { entries: this.cache.size, ttl_ms: this.config.cacheTtlMs, max_entries: this.config.cacheMaxEntries };
   }
 
   clearCache(): void {

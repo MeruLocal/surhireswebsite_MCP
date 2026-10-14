@@ -67,11 +67,32 @@ export const timedOut = (path: string, ms: number) =>
     "Retry, or raise SURHIRES_TIMEOUT_MS if the network is slow.",
   );
 
-export const networkFailure = (path: string, detail: string) =>
+/**
+ * The raw transport error (which can name hosts, IPs or resolver detail) goes
+ * to the operator log only; the caller gets a fixed phrase.
+ */
+export const networkFailure = (path: string) =>
   new SurhiresError(
     "network",
-    `Could not reach surhires.com for "${path}": ${detail}`,
-    "Check network connectivity and that SURHIRES_BASE_URL is correct.",
+    `Could not reach surhires.com for "${path}": network error.`,
+    "Retry shortly. If it persists, call get_server_diagnostics.",
+  );
+
+export const offOriginRedirect = (path: string) =>
+  new SurhiresError(
+    "upstream",
+    `surhires.com redirected "${path}" off the Surhires origin; not followed.`,
+    "This server only reads the configured Surhires origin. Verify the path with list_site_pages.",
+  );
+
+export const tooManyRedirects = (path: string) =>
+  new SurhiresError("upstream", `Too many redirects for "${path}"; not followed.`, "Verify the path with list_site_pages.");
+
+export const pageTooLarge = (path: string, maxBytes: number) =>
+  new SurhiresError(
+    "upstream",
+    `The page at "${path}" is too large (over ${maxBytes} bytes); not read.`,
+    "Raise SURHIRES_MAX_PAGE_BYTES only if you trust the origin's page sizes.",
   );
 
 export const upstreamFailure = (path: string, status: number) =>
@@ -100,11 +121,29 @@ export function asToolResult<A>(
       const value = await handler(args);
       return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
     } catch (error) {
-      const text =
-        error instanceof SurhiresError
-          ? error.toText()
-          : `Unexpected failure: ${error instanceof Error ? error.message : String(error)}`;
-      return { content: [{ type: "text" as const, text }], isError: true };
+      if (error instanceof SurhiresError) {
+        return { content: [{ type: "text" as const, text: error.toText() }], isError: true };
+      }
+      // Anything else is a bug or an internal failure: its message may carry
+      // internals, so it goes to the operator log (stderr) and the caller gets
+      // a generic sentence.
+      process.stderr.write(
+        `${JSON.stringify({
+          ts: new Date().toISOString(),
+          level: "error",
+          msg: "unexpected tool failure",
+          detail: error instanceof Error ? error.message : String(error),
+        })}\n`,
+      );
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: "Unexpected internal error while handling this request. Retry, or call get_server_diagnostics.",
+          },
+        ],
+        isError: true,
+      };
     }
   };
 }

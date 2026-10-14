@@ -64,6 +64,15 @@ ENV MCP_HTTP_HOST=0.0.0.0
 # "*" disables the check entirely — only on a trusted network.
 ENV MCP_ALLOWED_HOSTS=
 
+# Public https:// origin advertised on the status page and discovery document.
+#   docker run -e MCP_PUBLIC_BASE_URL=https://mcp.surhires.com ...
+ENV MCP_PUBLIC_BASE_URL=
+
+# Behind a reverse proxy, set TRUST_PROXY to the number of proxy hops (1, or 2
+# behind Cloudflare then Apache) so the per-client rate limit
+# (MCP_RATE_LIMIT_PER_MIN, default 60) keys on the real caller, not the proxy.
+ENV TRUST_PROXY=
+
 # Which market's localised pages to read: in | us | gb | au.
 ENV SURHIRES_MARKET=in
 

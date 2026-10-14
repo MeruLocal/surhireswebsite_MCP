@@ -16,36 +16,106 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { buildServer, SERVER_NAME, SERVER_VERSION } from "./server.js";
-import { loadConfig } from "./config.js";
+import { loadConfig, type Config } from "./config.js";
 import { createLogger } from "./utils/logger.js";
+import { SurhiresClient } from "./clients/surhires-client.js";
+import { clientKey, RateLimiter } from "./utils/rate-limit.js";
 
-const MAX_BODY_BYTES = 4 * 1024 * 1024;
+/** JSON-RPC requests here are a few hundred bytes; 1 MB is generous. */
+const MAX_BODY_BYTES = 1024 * 1024;
 
-async function readJsonBody(req: IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of req) {
-    const buf = chunk as Buffer;
-    size += buf.length;
-    if (size > MAX_BODY_BYTES) throw new Error("Request body too large");
-    chunks.push(buf);
-  }
-  if (chunks.length === 0) return undefined;
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+/** The public host this server is meant to be deployed at (founder to confirm). */
+const DEFAULT_PUBLIC_HOST = "mcp.surhires.com";
+
+class BodyTooLargeError extends Error {}
+
+/** After the cap is hit, keep reading (and discarding) at most this much more. */
+const MAX_DRAIN_BYTES = 8 * MAX_BODY_BYTES;
+
+/**
+ * Event-based body read. When the body is over the cap (declared or streamed)
+ * it stops buffering and rejects, but keeps draining the rest of the upload so
+ * the client can finish sending and read the 413 instead of seeing a reset.
+ * The drain is bounded; past that the request is destroyed.
+ */
+function readBody(req: IncomingMessage): Promise<string | undefined> {
+  return new Promise((resolve, reject) => {
+    const declared = Number(req.headers["content-length"]);
+    let chunks: Buffer[] = [];
+    let size = 0;
+    let tooLarge = false;
+
+    const overflow = () => {
+      if (tooLarge) return;
+      tooLarge = true;
+      chunks = [];
+      reject(new BodyTooLargeError());
+    };
+
+    if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) overflow();
+
+    req.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (tooLarge) {
+        if (size > MAX_BODY_BYTES + MAX_DRAIN_BYTES) req.destroy();
+        return;
+      }
+      if (size > MAX_BODY_BYTES) {
+        overflow();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => {
+      if (!tooLarge) resolve(chunks.length === 0 ? undefined : Buffer.concat(chunks).toString("utf8"));
+    });
+    req.on("error", (err) => {
+      if (!tooLarge) reject(err);
+    });
+    req.on("close", () => {
+      if (!tooLarge && !req.complete) reject(new Error("request closed before the body was read"));
+    });
+  });
 }
 
-const sendJson = (res: ServerResponse, status: number, payload: unknown): void => {
+const sendJson = (
+  res: ServerResponse,
+  status: number,
+  payload: unknown,
+  headers: Record<string, string> = {},
+): void => {
   const body = JSON.stringify(payload);
-  res.writeHead(status, { "content-type": "application/json", "content-length": Buffer.byteLength(body) });
+  res.writeHead(status, {
+    "content-type": "application/json",
+    "content-length": String(Buffer.byteLength(body)),
+    ...headers,
+  });
   res.end(body);
 };
+
+const rpcError = (code: number, message: string) => ({ jsonrpc: "2.0", error: { code, message }, id: null });
 
 const escapeHtml = (s: string): string =>
   s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c] ?? c);
 
+/** The base URL to advertise. From config only, never from Host/X-Forwarded-Host. */
+const advertisedBase = (config: Config): string => config.publicBaseUrl ?? `http://127.0.0.1:${config.port}`;
+
+/** Browser Origins allowed to call /mcp. "*" in the list allows any. */
+function allowedOrigins(config: Config): string[] {
+  const list = [
+    `http://localhost:${config.port}`,
+    `http://127.0.0.1:${config.port}`,
+    `https://${DEFAULT_PUBLIC_HOST}`,
+    ...config.allowedOrigins,
+  ];
+  if (config.publicBaseUrl) list.push(new URL(config.publicBaseUrl).origin);
+  return list;
+}
+
 /** Tool names, read from a throwaway server instance so the page cannot go stale. */
-function listToolNames(config: ReturnType<typeof loadConfig>): string[] {
-  const { server, toolNames } = buildServer({ config, logger: createLogger({ logLevel: "error" }) });
+function listToolNames(config: Config, client: SurhiresClient): string[] {
+  const { server, toolNames } = buildServer({ config, logger: createLogger({ logLevel: "error" }), client });
   void server.close();
   return toolNames;
 }
@@ -90,8 +160,7 @@ ${content}
  * Not part of the MCP protocol -- it exists so a GET does not look like a failure,
  * and so the scope of this server is stated plainly to whoever lands on it.
  */
-function sendStatusPage(res: ServerResponse, config: ReturnType<typeof loadConfig>): void {
-  const names = listToolNames(config);
+function sendStatusPage(res: ServerResponse, config: Config, names: string[]): void {
 
   const body = renderShell(
     "Surhires Website Knowledge MCP Server",
@@ -122,7 +191,7 @@ wording from Surhires' own pages.</p>
 <strong>${escapeHtml(config.market)}</strong> market, with ${names.length} tools registered.</p>
 
 <h2>Try it</h2>
-<pre>curl -X POST http://127.0.0.1:${config.port}/mcp \\
+<pre>curl -X POST ${escapeHtml(advertisedBase(config))}/mcp \\
   -H 'content-type: application/json' \\
   -H 'accept: application/json, text/event-stream' \\
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'</pre>
@@ -147,9 +216,19 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const log = createLogger(config);
 
+  // One client for the life of the process: its page cache, request
+  // coalescing and outbound concurrency limit then work across requests.
+  const client = new SurhiresClient(config, log);
+  // Built once: the tool set is fixed for the life of the process, so GET / and
+  // the discovery document must not construct a server per request.
+  const toolNames = listToolNames(config, client);
+  const limiter = new RateLimiter(config.rateLimitPerMin);
+  const origins = allowedOrigins(config);
+  const anyOrigin = config.allowedOrigins.includes("*");
+
   const http = createServer((req, res) => {
     void (async () => {
-      const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+      const url = new URL(req.url ?? "/", "http://localhost");
 
       // /healthz is kept as an alias so anything already pointed at it keeps working.
       if (url.pathname === "/health" || url.pathname === "/healthz") {
@@ -164,12 +243,17 @@ async function main(): Promise<void> {
       }
 
       if (url.pathname === "/" && req.method === "GET") {
-        sendStatusPage(res, config);
+        sendStatusPage(res, config, toolNames);
         return;
       }
 
       if (url.pathname === "/version") {
-        sendJson(res, 200, { name: SERVER_NAME, version: SERVER_VERSION });
+        sendJson(res, 200, {
+          name: SERVER_NAME,
+          version: SERVER_VERSION,
+          endpoint: "/mcp",
+          transport: "streamable-http",
+        });
         return;
       }
 
@@ -181,10 +265,14 @@ async function main(): Promise<void> {
           version: SERVER_VERSION,
           description:
             "Read-only MCP server over the public Surhires website: pricing, features, integrations, competitor comparisons, blog and compliance posture. Holds no credentials and performs no ATS actions.",
-          transport: { type: "streamable-http", url: `/mcp`, methods: ["POST"] },
+          transport: {
+            type: "streamable-http",
+            url: config.publicBaseUrl ? `${config.publicBaseUrl}/mcp` : "/mcp",
+            methods: ["POST"],
+          },
           authentication: { required: false, note: "No API key is required and none should be sent." },
           capabilities: { tools: { listChanged: true } },
-          tools: listToolNames(config),
+          tools: toolNames,
           documentation: "/",
         });
         return;
@@ -201,7 +289,7 @@ async function main(): Promise<void> {
         // stateless and has no standalone stream to attach to. A browser, which
         // asks for HTML, gets a readable status page instead of a bare error.
         if (req.method === "GET" && accept.includes("text/html")) {
-          sendStatusPage(res, config);
+          sendStatusPage(res, config, toolNames);
           return;
         }
         res.writeHead(405, { allow: "POST", "content-type": "application/json" });
@@ -214,8 +302,46 @@ async function main(): Promise<void> {
         return;
       }
 
+      // A browser on another site must not be able to drive this server through
+      // a visitor. Non-browser MCP clients send no Origin and are unaffected.
+      const origin = req.headers.origin;
+      if (origin !== undefined && !anyOrigin && !origins.includes(origin.replace(/\/+$/, ""))) {
+        sendJson(res, 403, rpcError(-32000, "Forbidden: this Origin is not allowed to call this server."));
+        return;
+      }
+
+      const wait = limiter.hit(clientKey(req, config.trustProxy));
+      if (wait > 0) {
+        sendJson(res, 429, rpcError(-32000, `Rate limit exceeded. Retry after ${wait}s.`), {
+          "retry-after": String(wait),
+        });
+        return;
+      }
+
+      let raw: string | undefined;
+      try {
+        raw = await readBody(req);
+      } catch (error) {
+        if (error instanceof BodyTooLargeError) {
+          sendJson(res, 413, rpcError(-32600, `Request body too large (limit ${MAX_BODY_BYTES} bytes).`));
+          return;
+        }
+        log.error("request read failed", { detail: error instanceof Error ? error.message : String(error) });
+        if (!res.headersSent) sendJson(res, 500, rpcError(-32603, "Internal server error"));
+        return;
+      }
+
+      let body: unknown;
+      try {
+        body = raw === undefined ? undefined : JSON.parse(raw);
+      } catch {
+        // The caller's own malformed JSON is a client error, not a server fault.
+        sendJson(res, 400, rpcError(-32700, "Parse error"));
+        return;
+      }
+
       // One server + transport per request: stateless, so nothing leaks between callers.
-      const { server } = buildServer({ config, logger: log });
+      const { server } = buildServer({ config, logger: log, client, deepPageCap: config.httpDeepMaxPages });
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
         // In a container or behind a proxy the Host header is the public name,
@@ -226,6 +352,9 @@ async function main(): Promise<void> {
           `${config.httpHost}:${config.port}`,
           `localhost:${config.port}`,
           `127.0.0.1:${config.port}`,
+          DEFAULT_PUBLIC_HOST,
+          `${DEFAULT_PUBLIC_HOST}:443`,
+          ...(config.publicBaseUrl ? [new URL(config.publicBaseUrl).host] : []),
           ...config.allowedHosts,
         ],
       });
@@ -237,16 +366,10 @@ async function main(): Promise<void> {
 
       try {
         await server.connect(transport);
-        await transport.handleRequest(req, res, await readJsonBody(req));
+        await transport.handleRequest(req, res, body);
       } catch (error) {
         log.error("request failed", { detail: error instanceof Error ? error.message : String(error) });
-        if (!res.headersSent) {
-          sendJson(res, 500, {
-            jsonrpc: "2.0",
-            error: { code: -32603, message: "Internal server error" },
-            id: null,
-          });
-        }
+        if (!res.headersSent) sendJson(res, 500, rpcError(-32603, "Internal server error"));
       }
     })();
   });

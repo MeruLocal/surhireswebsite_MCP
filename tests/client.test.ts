@@ -167,7 +167,9 @@ describe("error handling and retries", () => {
       (error: unknown) => {
         assert.ok(error instanceof SurhiresError);
         assert.equal(error.kind, "network");
-        assert.match(error.toText(), /ENOTFOUND/);
+        // The raw transport detail (hosts, resolver errors) goes to the log only.
+        assert.doesNotMatch(error.toText(), /ENOTFOUND/);
+        assert.match(error.toText(), /network error/);
         return true;
       },
     );
@@ -261,5 +263,132 @@ describe("page extraction through the client", () => {
     assert.equal(page.path, "/in/features/resume-parsing");
     assert.equal(page.heading, "Resumes become records, not attachments");
     assert.equal(page.faqs.length, 2);
+  });
+});
+
+describe("bounded LRU cache", () => {
+  test("evicts the least recently used page past SURHIRES_CACHE_MAX_ENTRIES", async () => {
+    const { client, mock } = build({ SURHIRES_CACHE_MAX_ENTRIES: "2" });
+    const count = (p: string) => mock.calls.filter((c) => c === p).length;
+    await client.getText("/pricing"); // A
+    await client.getText("/vs/bullhorn"); // B
+    await client.getText("/pricing"); // touch A
+    await client.getText("/integrations/naukri"); // C evicts B
+    assert.equal(client.cacheStats().entries, 2);
+    assert.equal(client.cacheStats().max_entries, 2);
+    await client.getText("/pricing");
+    await client.getText("/vs/bullhorn");
+    assert.equal(count("/in/pricing"), 1, "A stayed cached");
+    assert.equal(count("/in/vs/bullhorn"), 2, "B was evicted and refetched");
+  });
+});
+
+describe("redirect handling", () => {
+  const withUrls = (overrides: Record<string, string> = {}) => {
+    const mock = createMockFetch();
+    const urls: string[] = [];
+    const fetch: typeof mock.fetch = async (input, init) => {
+      urls.push(input);
+      assert.equal(init?.redirect, "manual", "redirects must be followed by hand");
+      return mock.fetch(input, init);
+    };
+    return { client: new SurhiresClient(config(overrides), silent, fetch), mock, urls };
+  };
+
+  test("follows a same-origin redirect", async () => {
+    const { client, mock } = withUrls();
+    mock.script("/in/old-pricing", [{ kind: "status", status: 307, headers: { location: "/in/pricing" } }]);
+    const html = await client.getText("/old-pricing");
+    assert.match(html, /Priced per seat/);
+  });
+
+  test("refuses an off-origin redirect without contacting the other host", async () => {
+    const { client, mock, urls } = withUrls();
+    mock.script("/in/pricing", [{ kind: "status", status: 302, headers: { location: "https://other.example/x" } }]);
+    await assert.rejects(
+      () => client.getText("/pricing"),
+      (error: unknown) => {
+        assert.ok(error instanceof SurhiresError);
+        assert.equal(error.kind, "upstream");
+        assert.match(error.message, /off the Surhires origin/);
+        return true;
+      },
+    );
+    assert.ok(urls.every((u) => new URL(u).host === "surhires.com"), urls.join(", "));
+  });
+
+  test("refuses a redirect into the robots-disallowed /api/", async () => {
+    const { client, mock, urls } = withUrls();
+    mock.script("/in/pricing", [{ kind: "status", status: 301, headers: { location: "/in/api/x" } }]);
+    await assert.rejects(
+      () => client.getText("/pricing"),
+      (error: unknown) => error instanceof SurhiresError && error.kind === "blocked_by_robots",
+    );
+    assert.ok(!urls.some((u) => u.includes("/api/")));
+  });
+});
+
+describe("outbound body cap", () => {
+  test("refuses a page larger than SURHIRES_MAX_PAGE_BYTES", async () => {
+    const { client, mock } = build({ SURHIRES_MAX_PAGE_BYTES: "2048" });
+    mock.script("/in/pricing", [{ kind: "body", body: "x".repeat(5000) }]);
+    await assert.rejects(
+      () => client.getText("/pricing"),
+      (error: unknown) => error instanceof SurhiresError && error.kind === "upstream" && /too large/.test(error.message),
+    );
+  });
+
+  test("refuses early on a declared content-length over the cap", async () => {
+    const { client, mock } = build({ SURHIRES_MAX_PAGE_BYTES: "2048" });
+    mock.script("/in/pricing", [{ kind: "status", status: 200, headers: { "content-length": "999999" } }]);
+    await assert.rejects(
+      () => client.getText("/pricing"),
+      (error: unknown) => error instanceof SurhiresError && /too large/.test(error.message),
+    );
+  });
+
+  test("a stream larger than the cap fails before it is fully read", async () => {
+    let pulled = 0;
+    let cancelled = false;
+    const chunk = new Uint8Array(1024).fill(120);
+    const total = 100; // 100 KiB on offer, cap is 2 KiB
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (pulled >= total) return controller.close();
+        pulled += 1;
+        controller.enqueue(chunk);
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const fetch = async () => ({
+      ok: true,
+      status: 200,
+      text: async () => "unused",
+      headers: { get: () => null },
+      body: stream as never,
+    });
+    const client = new SurhiresClient(config({ SURHIRES_MAX_PAGE_BYTES: "2048", SURHIRES_MAX_RETRIES: "0" }), silent, fetch);
+    await assert.rejects(
+      () => client.getText("/pricing"),
+      (error: unknown) => error instanceof SurhiresError && /too large/.test(error.message),
+    );
+    assert.ok(pulled < total, `read ${pulled} of ${total} chunks`);
+    assert.ok(cancelled, "the stream was cancelled");
+  });
+
+  test("reads a streamed body under the cap", async () => {
+    const encoder = new TextEncoder();
+    const fetch = async () => ({
+      ok: true,
+      status: 200,
+      text: async () => "unused",
+      headers: { get: () => null },
+      body: new Response("<html>streamed</html>").body as never,
+    });
+    void encoder;
+    const client = new SurhiresClient(config(), silent, fetch);
+    assert.equal(await client.getText("/pricing"), "<html>streamed</html>");
   });
 });

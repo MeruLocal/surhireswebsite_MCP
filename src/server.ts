@@ -38,6 +38,14 @@ export interface BuildOptions {
   config?: Config;
   logger?: Logger;
   fetchImpl?: FetchLike;
+  /**
+   * A client to share across server instances. The HTTP transport builds one
+   * server per request; passing one long-lived client keeps its page cache,
+   * request coalescing and outbound concurrency limit working across requests.
+   */
+  client?: SurhiresClient;
+  /** Per-call page budget for fan-out tools (set by the HTTP transport). */
+  deepPageCap?: number;
 }
 
 export function buildServer(options: BuildOptions = {}): {
@@ -49,14 +57,14 @@ export function buildServer(options: BuildOptions = {}): {
 } {
   const config = options.config ?? loadConfig();
   const log = options.logger ?? createLogger(config);
-  const client = new SurhiresClient(config, log, options.fetchImpl);
+  const client = options.client ?? new SurhiresClient(config, log, options.fetchImpl);
 
   const server = new McpServer(
     { name: SERVER_NAME, version: SERVER_VERSION },
     { instructions: INSTRUCTIONS, capabilities: { tools: {} } },
   );
 
-  const ctx: ToolContext = { client, defaultMarket: config.market };
+  const ctx: ToolContext = { client, defaultMarket: config.market, deepPageCap: options.deepPageCap };
 
   // Record tool names as they register, so callers (and the HTTP status page)
   // can report them without reaching into the SDK's internals.
