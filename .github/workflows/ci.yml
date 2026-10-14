@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test
+      - run: npm audit --omit=dev --audit-level=high
+      - run: node scripts/check-versions.mjs
+      # The forbidden-name list lives in a repository variable or secret, never
+      # in the repo itself. With neither set, the guard is a no-op.
+      - name: Brand-isolation guard
+        run: node scripts/check-brands.mjs
+        env:
+          FORBIDDEN_BRANDS: ${{ secrets.FORBIDDEN_BRANDS || vars.FORBIDDEN_BRANDS }}

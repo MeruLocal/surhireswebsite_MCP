@@ -2,7 +2,7 @@
   "mcpServers": {
     "surhires": {
       "command": "node",
-      "args": ["C:\\Users\\Hp\\Desktop\\Surhires_MCP\\dist\\index.js"],
+      "args": ["/absolute/path/to/surhires-mcp/dist/index.js"],
       "env": {
         "SURHIRES_MARKET": "in",
         "SURHIRES_CONTACT": "you@example.com",
