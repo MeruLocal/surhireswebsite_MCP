@@ -29,19 +29,53 @@ const DEFAULT_PUBLIC_HOST = "mcp.surhires.com";
 
 class BodyTooLargeError extends Error {}
 
-async function readBody(req: IncomingMessage): Promise<string | undefined> {
-  const declared = Number(req.headers["content-length"]);
-  if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) throw new BodyTooLargeError();
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of req) {
-    const buf = chunk as Buffer;
-    size += buf.length;
-    if (size > MAX_BODY_BYTES) throw new BodyTooLargeError();
-    chunks.push(buf);
-  }
-  if (chunks.length === 0) return undefined;
-  return Buffer.concat(chunks).toString("utf8");
+/** After the cap is hit, keep reading (and discarding) at most this much more. */
+const MAX_DRAIN_BYTES = 8 * MAX_BODY_BYTES;
+
+/**
+ * Event-based body read. When the body is over the cap (declared or streamed)
+ * it stops buffering and rejects, but keeps draining the rest of the upload so
+ * the client can finish sending and read the 413 instead of seeing a reset.
+ * The drain is bounded; past that the request is destroyed.
+ */
+function readBody(req: IncomingMessage): Promise<string | undefined> {
+  return new Promise((resolve, reject) => {
+    const declared = Number(req.headers["content-length"]);
+    let chunks: Buffer[] = [];
+    let size = 0;
+    let tooLarge = false;
+
+    const overflow = () => {
+      if (tooLarge) return;
+      tooLarge = true;
+      chunks = [];
+      reject(new BodyTooLargeError());
+    };
+
+    if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) overflow();
+
+    req.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (tooLarge) {
+        if (size > MAX_BODY_BYTES + MAX_DRAIN_BYTES) req.destroy();
+        return;
+      }
+      if (size > MAX_BODY_BYTES) {
+        overflow();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => {
+      if (!tooLarge) resolve(chunks.length === 0 ? undefined : Buffer.concat(chunks).toString("utf8"));
+    });
+    req.on("error", (err) => {
+      if (!tooLarge) reject(err);
+    });
+    req.on("close", () => {
+      if (!tooLarge && !req.complete) reject(new Error("request closed before the body was read"));
+    });
+  });
 }
 
 const sendJson = (
@@ -297,9 +331,7 @@ async function main(): Promise<void> {
         raw = await readBody(req);
       } catch (error) {
         if (error instanceof BodyTooLargeError) {
-          sendJson(res, 413, rpcError(-32600, `Request body too large (limit ${MAX_BODY_BYTES} bytes).`), {
-            connection: "close",
-          });
+          sendJson(res, 413, rpcError(-32600, `Request body too large (limit ${MAX_BODY_BYTES} bytes).`));
           return;
         }
         log.error("request read failed", { detail: error instanceof Error ? error.message : String(error) });
