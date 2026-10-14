@@ -13,9 +13,14 @@
 | d | There is no Origin allowlist. A Host check (DNS-rebinding protection) exists, but a browser on any site can POST cross-origin. | `src/http.ts:219-231` (`allowedOrigins` unset) |
 | e | Unexpected errors echo `error.message` to the caller. | `src/utils/errors.ts:104` (`Unexpected failure: ${error.message}`) |
 | f | The body cap is 4 MB. JSON-RPC requests here are a few hundred bytes. | `src/http.ts:22` |
+| g | *(added 2026-10-14 re-audit)* `detail=true` list tools fan out too, not only deep search: `list_features`/`list_integrations`/`list_solutions` fetch up to 100 pages (`limit` max 100), `list_blog_posts` up to 60, and `list_resources` / `list_free_tools` fetch **every** page in their section **by default** (`detail` defaults to `true`). | `src/tools/catalog.ts:41-48, 75, 184-191`; `src/tools/content.ts:40-48, 77, 208-216` |
+| h | *(added 2026-10-14)* No response size cap on outbound fetches: `response.text()` reads any body the origin (or a redirect target, see c) returns. | `src/clients/surhires-client.ts:169` |
+| i | *(added 2026-10-14)* Per-page error strings echo raw transport errors (e.g. `getaddrinfo ENOTFOUND <host>`) via `networkFailure(path, error.message)`. | `src/clients/surhires-client.ts:177` |
 
 Measured on `main` (248f38d) with a local `dist/http.js`:
 - A POST to `/mcp` with `Origin: http://evil.example` returned **200** with the full `tools/list`.
+- Re-audit 2026-10-14 (new script, `--path /mcp`): **4 fail · 12 warn · 26 pass**. Relevant FAILs: `X.rebinding` (Origin accepted, 200) and `X.body_cap` (a 2.5 MB body accepted, 200). WARNs: `X.rate_limit` (no 429 in 70 rapid requests), `X.amplification` (search_site, search_blog). `X.rebinding` Host check PASSes (403).
+- 8 parallel `get_pricing` calls produced 8 separate origin fetches of `/in/pricing` (fake origin hit counter): no sharing across requests, see PR #3.
 - The audit script gives 4 fail / 6 warn / 12 pass. Its "1 write tool callable ... rate-limited?" WARN refers to `get_server_diagnostics`.
 
 ## Proposed fix
@@ -42,6 +47,9 @@ Measured on `main` (248f38d) with a local `dist/http.js`:
    - Also add `mcp.surhires.com` and `mcp.surhires.com:443` to the default `allowedHosts`.
 5. **Generic errors (e).** In `asToolResult`, return the `SurhiresError` text as today. Any other error gets "Unexpected internal error while handling this request..." and the detail goes to stderr.
 6. **Body cap (f).** Cap the body at 1 MB. Return 413 with a JSON-RPC error, rather than today's 500.
+7. **Detail fan-out (g).** Apply the same `deepPageCap` to every `detail=true` window (`fetchAll` callers in `catalog.ts` and `content.ts`). Over HTTP, change the `detail` default of `list_resources` and `list_free_tools` to `false`, or cap them at the same 10 pages and report `detail_capped_to`.
+8. **Outbound body cap (h).** Read the response as a stream and abort past `SURHIRES_MAX_PAGE_BYTES` (default 5 MB), throwing `SurhiresError("upstream", "page too large")`. Check `content-length` first when present.
+9. **Error detail (i).** `networkFailure` keeps the path and a fixed phrase ("network error"); the raw message goes to the log only.
 
 Document every new env var in the README (container section) and `.env.example`.
 
@@ -62,6 +70,9 @@ Document every new env var in the README (container section) and `.env.example`.
   - With `MCP_RATE_LIMIT_PER_MIN=2`, the 3rd POST gets 429 with `Retry-After`.
   - A 2 MB body gets 413.
 - `asToolResult`: a plain `Error("secret internals")` is not echoed.
+- `list_resources` over HTTP with 30 resources in a fixture: at most 10 page fetches, `detail_capped_to` reported.
+- A mock response larger than `SURHIRES_MAX_PAGE_BYTES` is refused with an `upstream` error.
+- A network error's result text has no `ENOTFOUND` / host detail.
 
 ## Risks / rollout
 
