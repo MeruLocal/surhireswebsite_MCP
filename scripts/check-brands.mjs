@@ -10,7 +10,9 @@
  *   FORBIDDEN_BRANDS="name one,name-two" node scripts/check-brands.mjs [root]
  *
  * Matching is case-insensitive substring matching. Exit codes: 0 clean (or no
- * list supplied), 1 a hit was found, 2 usage error.
+ * list supplied), 1 a hit was found, or no list was supplied while
+ * BRANDS_REQUIRED=true (CI sets this on pushes to main), 2 usage error.
+ * With no list and BRANDS_REQUIRED unset the guard only warns.
  */
 import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -65,7 +67,11 @@ if (isMain) {
     .filter(Boolean);
 
   if (names.length === 0) {
-    console.log("check-brands: FORBIDDEN_BRANDS is not set; nothing to check (set it from a CI secret).");
+    if (process.env.BRANDS_REQUIRED === "true") {
+      console.error("check-brands: FORBIDDEN_BRANDS is not set but is required here; set the repository variable.");
+      process.exit(1);
+    }
+    console.warn("::warning::check-brands: FORBIDDEN_BRANDS is not set; nothing was checked (set the repository variable).");
     process.exit(0);
   }
 

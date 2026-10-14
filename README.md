@@ -268,7 +268,7 @@ Surhires is a separate brand. Before the public host goes live, every surface a 
 - [ ] The reverse proxy strips or neutralises `Server`, `Via` and `X-Powered-By`.
 - [ ] Proxy error pages (502/503/504) carry no other brand or host.
 - [ ] `SURHIRES_CONTACT` is a Surhires address, or left unset.
-- [ ] The brand guard passes on the shipped files: `FORBIDDEN_BRANDS="<list>" npm run check:brands`. Keep the list in a CI secret or variable, never in this repository.
+- [ ] The brand guard passes on the shipped files: `FORBIDDEN_BRANDS="<list>" npm run check:brands`. Keep the list in the `FORBIDDEN_BRANDS` repository variable (a secret works as fallback); CI fails a push to `main` if neither is set, never in this repository.
 - [ ] The live audit passes with 0 FAIL on `C9.payloads`: `node audit-live-mcp.mjs https://<public host> --path /mcp --expect-host <public host> --forbid-brands "<list>"`.
 - [ ] Registry metadata (`server.json`, if added) uses a Surhires namespace and omits any repository link that names another organisation.
 
