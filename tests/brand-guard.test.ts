@@ -12,9 +12,9 @@ import { join, resolve } from "node:path";
 const repo = resolve(import.meta.dirname, "..");
 const script = join(repo, "scripts", "check-brands.mjs");
 
-const run = (root: string, names: string | undefined) =>
+const run = (root: string, names: string | undefined, required = false) =>
   spawnSync(process.execPath, [script, root], {
-    env: { ...process.env, FORBIDDEN_BRANDS: names ?? "" },
+    env: { ...process.env, FORBIDDEN_BRANDS: names ?? "", BRANDS_REQUIRED: required ? "true" : "" },
     encoding: "utf8",
   });
 
@@ -59,9 +59,15 @@ describe("check-brands guard", () => {
     }
   });
 
-  test("is a no-op when no list is supplied", () => {
+  test("only warns when no list is supplied (pull requests)", () => {
     const r = run(repo, undefined);
     assert.equal(r.status, 0);
-    assert.match(r.stdout, /not set/);
+    assert.match(r.stderr, /not set/);
+  });
+
+  test("fails when no list is supplied and one is required (push to main)", () => {
+    const r = run(repo, undefined, true);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /required/);
   });
 });

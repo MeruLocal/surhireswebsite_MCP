@@ -114,7 +114,7 @@ Every one needs an authenticated API Surhires does not publish. A test in `tests
 
 ## 3. Install and build
 
-Requires Node.js 20 or newer (developed on 26).
+Requires Node.js 20 or newer to run (developed on 26). The test suite runs TypeScript test files directly, which needs Node.js 22.6 or newer (22.18+ needs no flag; `scripts/run-tests.mjs` adds it on older 22.x).
 
 ```bash
 npm install
@@ -176,7 +176,7 @@ Edit the config file:
   "mcpServers": {
     "surhires": {
       "command": "node",
-      "args": ["C:\\Users\\Hp\\Desktop\\Surhires_MCP\\dist\\index.js"],
+      "args": ["/absolute/path/to/surhires-mcp/dist/index.js"],
       "env": {
         "SURHIRES_MARKET": "in",
         "SURHIRES_CONTACT": "you@example.com",
@@ -187,7 +187,7 @@ Edit the config file:
 }
 ```
 
-Use an **absolute path** to `dist/index.js`, with escaped backslashes on Windows. A copy of this is in `claude_desktop_config.example.json`. Run `npm run build` first — the config points at compiled output, not `src/`. Then restart Claude Desktop fully (quit from the tray, not just close the window).
+Use an **absolute path** to `dist/index.js`. On Windows, escape every backslash in JSON, e.g. `"C:\\path\\to\\surhires-mcp\\dist\\index.js"`. A copy of this is in `claude_desktop_config.example.json`. Run `npm run build` first — the config points at compiled output, not `src/`. Then restart Claude Desktop fully (quit from the tray, not just close the window).
 
 ### Verify Claude discovered the tools
 
@@ -268,7 +268,7 @@ Surhires is a separate brand. Before the public host goes live, every surface a 
 - [ ] The reverse proxy strips or neutralises `Server`, `Via` and `X-Powered-By`.
 - [ ] Proxy error pages (502/503/504) carry no other brand or host.
 - [ ] `SURHIRES_CONTACT` is a Surhires address, or left unset.
-- [ ] The brand guard passes on the shipped files: `FORBIDDEN_BRANDS="<list>" npm run check:brands`. Keep the list in a CI secret or variable, never in this repository.
+- [ ] The brand guard passes on the shipped files: `FORBIDDEN_BRANDS="<list>" npm run check:brands`. Keep the list in the `FORBIDDEN_BRANDS` repository variable (a secret works as fallback); CI fails a push to `main` if neither is set, never in this repository.
 - [ ] The live audit passes with 0 FAIL on `C9.payloads`: `node audit-live-mcp.mjs https://<public host> --path /mcp --expect-host <public host> --forbid-brands "<list>"`.
 - [ ] Registry metadata (`server.json`, if added) uses a Surhires namespace and omits any repository link that names another organisation.
 
@@ -312,14 +312,14 @@ What to expect when you ask for the impossible:
 ## 6. Testing
 
 ```bash
-npm test          # 108 offline tests against mocked HTTP
+npm test          # every tests/*.test.ts except live, against mocked HTTP
 npm run typecheck
 SURHIRES_LIVE=1 npm run test:live   # 10 tests against the real site
 ```
 
 ### What is actually verified
 
-**Offline (108 tests, all passing).** Mocked at the `fetch` boundary with fixtures copied from live page structure.
+**Offline (all passing).** Mocked at the `fetch` boundary with fixtures copied from live page structure.
 
 - `extract.test.ts` — JSON-LD flattening, malformed-block tolerance, entity decoding, FAQ extraction, `AggregateOffer`/`Offer` parsing, breadcrumbs, table parsing, nav/footer/script exclusion, meta fallbacks.
 - `client.test.ts` — market prefixing (including sitemap exemptions and no double-prefixing), the robots `/api/` refusal, cache hits, request coalescing, TTL=0, 404 mapping, 500 retry-then-succeed, 429 with `Retry-After`, timeouts, network failures, sitemap merge with one file down, malformed sitemap entries, concurrency ceiling.
@@ -451,3 +451,7 @@ What is unavailable today, and what would unblock it.
 Read-only GETs of public pages. No credentials held, no authenticated system touched, no CAPTCHA or access control bypassed, nothing written to Surhires. Requests are capped at 4 concurrent, cached for 15 minutes, retried with backoff, and sent with an identifying User-Agent carrying your contact address. `robots.txt` is honoured in code.
 
 Content belongs to Surhires / Soor LLC. This is the official Surhires MCP server for public website content. Treat vendor-authored comparison pages as marketing, and confirm anything commercially load-bearing with Surhires directly.
+
+## License and distribution
+
+MIT, see `LICENSE`. The package is `"private": true` and is **not published to npm** or to any MCP registry from this repository.
