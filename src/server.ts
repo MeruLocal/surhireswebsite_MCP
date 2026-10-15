@@ -1,13 +1,14 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { loadConfig, type Config } from "./config.js";
 import { createLogger, type Logger } from "./utils/logger.js";
-import { setResponseCap } from "./utils/errors.js";
+import { errorKinds, setResponseCap } from "./utils/errors.js";
 import { SurhiresClient, type FetchLike } from "./clients/surhires-client.js";
 import { registerPageTools } from "./tools/pages.js";
 import { registerCatalogTools } from "./tools/catalog.js";
 import { registerPricingTools } from "./tools/pricing.js";
 import { registerContentTools } from "./tools/content.js";
 import { registerCompanyTools } from "./tools/company.js";
+import { registerResourcesAndPrompts } from "./tools/resources.js";
 import type { ToolContext } from "./tools/shared.js";
 
 import { SERVER_VERSION, WEBSITE_URL } from "./version.js";
@@ -67,24 +68,42 @@ export function buildServer(options: BuildOptions = {}): {
 
   const server = new McpServer(
     { name: SERVER_NAME, title: "Surhires MCP Server", version: SERVER_VERSION, websiteUrl: WEBSITE_URL },
-    { instructions: INSTRUCTIONS, capabilities: { tools: {} } },
+    { instructions: INSTRUCTIONS, capabilities: { tools: {}, resources: {}, prompts: {} } },
   );
 
   setResponseCap(config.maxResponseChars);
   const ctx: ToolContext = {
     client,
     defaultMarket: config.market,
+    baseUrl: config.baseUrl,
     deepPageCap: options.deepPageCap,
     maxCharsLimit: config.maxCharsLimit,
   };
 
   // Record tool names as they register, so callers (and the HTTP status page)
-  // can report them without reaching into the SDK's internals.
+  // can report them without reaching into the SDK's internals. Each handler is
+  // also wrapped to log one usage line per call: the tool, outcome, latency
+  // and client name. Arguments and results are never logged -- a query can
+  // carry a user's own words.
   const toolNames: string[] = [];
   const register = server.registerTool.bind(server);
-  server.registerTool = ((name: string, ...rest: unknown[]) => {
+  server.registerTool = ((name: string, config: unknown, handler: (...a: unknown[]) => Promise<unknown>) => {
     toolNames.push(name);
-    return (register as (...args: unknown[]) => unknown)(name, ...rest);
+    const timed = async (...args: unknown[]) => {
+      const started = Date.now();
+      const result = (await handler(...args)) as { isError?: boolean };
+      const client = server.server.getClientVersion();
+      const kind = errorKinds.get(result);
+      log.info("tool_call", {
+        tool: name,
+        ok: !result.isError,
+        ms: Date.now() - started,
+        ...(kind ? { error_kind: kind } : {}),
+        ...(client ? { client: `${client.name}/${client.version}` } : {}),
+      });
+      return result;
+    };
+    return (register as (...args: unknown[]) => unknown)(name, config, timed);
   }) as typeof server.registerTool;
 
   registerPageTools(server, ctx, config.baseUrl);
@@ -92,6 +111,7 @@ export function buildServer(options: BuildOptions = {}): {
   registerPricingTools(server, ctx);
   registerContentTools(server, ctx);
   registerCompanyTools(server, ctx);
+  registerResourcesAndPrompts(server, ctx);
 
   log.info("server built", {
     name: SERVER_NAME,

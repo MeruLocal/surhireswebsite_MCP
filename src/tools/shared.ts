@@ -3,12 +3,15 @@ import type { Market } from "../config.js";
 import type { SurhiresClient, SitemapEntry } from "../clients/surhires-client.js";
 import type { ExtractedPage } from "../clients/extract.js";
 import { notFound, SurhiresError } from "../utils/errors.js";
+import { withUtm } from "../utils/utm.js";
 import { matchesAll, score, terms } from "../utils/validation.js";
 
 /** Everything a tool handler needs, passed once at registration. */
 export interface ToolContext {
   client: SurhiresClient;
   defaultMarket: Market;
+  /** The configured Surhires origin; only links on its host get UTM tags. */
+  baseUrl: string;
   /**
    * Most pages one call may fetch (deep search, detail=true lists). Set for the
    * anonymous HTTP transport; unset over stdio, where each tool's own maximum
@@ -110,12 +113,13 @@ export function clip(text: string, maxChars: number): { text: string; truncated:
 /** The standard page payload returned by every page-reading tool. */
 export function presentPage(
   page: ExtractedPage,
-  opts: { maxChars: number; includeFaqs?: boolean; includeLinks?: boolean },
+  opts: { maxChars: number; includeFaqs?: boolean; includeLinks?: boolean; utm?: { ctx: ToolContext; tool: string } },
 ): Record<string, unknown> {
   const body = clip(page.body_text, opts.maxChars);
   return {
     path: page.path,
-    url: page.url,
+    // A link, so it carries attribution; `path` stays an untagged identifier.
+    url: opts.utm ? withUtm(page.url, opts.utm.tool, opts.utm.ctx.baseUrl) : page.url,
     title: page.title,
     heading: page.heading,
     description: page.description,

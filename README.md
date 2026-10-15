@@ -40,7 +40,7 @@ Checked on **2026-10-13**. Every finding is reproducible with the command shown.
 
 ## 2. Supported tools
 
-27 tools, all read-only. The "reads" column is the actual page or data source — no tool calls anything undocumented.
+28 tools, all read-only, plus two resources and one prompt (below). The "reads" column is the actual page or data source — no tool calls anything undocumented.
 
 ### Discovery and search
 
@@ -88,6 +88,21 @@ Checked on **2026-10-13**. Every finding is reproducible with the command shown.
 | `get_trust_and_security` | `/security` + `/trust-center` |
 | `list_legal_documents` | Terms, privacy, DPA, GDPR, DPDPA, CCPA, EEO/OFCCP and the rest |
 | `get_server_diagnostics` | This server's config, cache state and live reachability |
+| `get_started` | The next step for someone ready to try or buy: the market's pricing page, the published sales contact, and a signup/demo page only if the sitemap lists one |
+
+Links back to the Surhires site in results (`url`, `pricing_url`, …) carry `utm_source=mcp&utm_medium=ai_agent&utm_campaign=<tool>`, so agent-referred visits show up in analytics. `path` fields stay untagged; links to other hosts are never tagged.
+
+### Resources and prompts
+
+| Kind | Name | What it gives |
+|---|---|---|
+| Resource | `surhires://pricing/{market}` | The `get_pricing` result for one market (`in`, `us`, `gb`, `au`) |
+| Resource | `surhires://features` | Every published feature page, from the sitemap |
+| Prompt | `recommend_plan` (`team_size`, `market`) | Walks the model through `get_pricing`, `list_features` and `get_started`; states no price or term itself |
+
+### Usage log
+
+Every tool call writes one JSON line to stderr: `{"msg":"tool_call","tool","ok","ms","error_kind"?,"client"?}`. Arguments and results are never logged, because a query can carry a user's own words. Where those logs are shipped, and for how long they are kept, is a deployment decision.
 
 ### Tools deliberately **not** implemented
 
@@ -99,7 +114,7 @@ Every one needs an authenticated API Surhires does not publish. A test in `tests
 
 ## 3. Install and build
 
-Requires Node.js 20 or newer (developed on 26).
+Requires Node.js 20 or newer to run (developed on 26). The test suite runs TypeScript test files directly, which needs Node.js 22.6 or newer (22.18+ needs no flag; `scripts/run-tests.mjs` adds it on older 22.x).
 
 ```bash
 npm install
@@ -161,7 +176,7 @@ Edit the config file:
   "mcpServers": {
     "surhires": {
       "command": "node",
-      "args": ["C:\\Users\\Hp\\Desktop\\Surhires_MCP\\dist\\index.js"],
+      "args": ["/absolute/path/to/surhires-mcp/dist/index.js"],
       "env": {
         "SURHIRES_MARKET": "in",
         "SURHIRES_CONTACT": "you@example.com",
@@ -172,11 +187,11 @@ Edit the config file:
 }
 ```
 
-Use an **absolute path** to `dist/index.js`, with escaped backslashes on Windows. A copy of this is in `claude_desktop_config.example.json`. Run `npm run build` first — the config points at compiled output, not `src/`. Then restart Claude Desktop fully (quit from the tray, not just close the window).
+Use an **absolute path** to `dist/index.js`. On Windows, escape every backslash in JSON, e.g. `"C:\\path\\to\\surhires-mcp\\dist\\index.js"`. A copy of this is in `claude_desktop_config.example.json`. Run `npm run build` first — the config points at compiled output, not `src/`. Then restart Claude Desktop fully (quit from the tray, not just close the window).
 
 ### Verify Claude discovered the tools
 
-1. Open Claude Desktop → the tools/plug icon in the message composer → `surhires` should list **27 tools**.
+1. Open Claude Desktop → the tools/plug icon in the message composer → `surhires` should list **28 tools**.
 2. Ask: *"Use get_server_diagnostics to check the Surhires server."* Expect `surhires_reachable: true` and a non-zero `pages_in_sitemap`.
 3. If it does not appear, check the MCP log:
    - Windows: `%APPDATA%\Claude\logs\mcp-server-surhires.log`
@@ -253,7 +268,7 @@ Surhires is a separate brand. Before the public host goes live, every surface a 
 - [ ] The reverse proxy strips or neutralises `Server`, `Via` and `X-Powered-By`.
 - [ ] Proxy error pages (502/503/504) carry no other brand or host.
 - [ ] `SURHIRES_CONTACT` is a Surhires address, or left unset.
-- [ ] The brand guard passes on the shipped files: `FORBIDDEN_BRANDS="<list>" npm run check:brands`. Keep the list in a CI secret or variable, never in this repository.
+- [ ] The brand guard passes on the shipped files: `FORBIDDEN_BRANDS="<list>" npm run check:brands`. Keep the list in the `FORBIDDEN_BRANDS` repository variable (a secret works as fallback); CI fails a push to `main` if neither is set, never in this repository.
 - [ ] The live audit passes with 0 FAIL on `C9.payloads`: `node audit-live-mcp.mjs https://<public host> --path /mcp --expect-host <public host> --forbid-brands "<list>"`.
 - [ ] Registry metadata (`server.json`, if added) uses a Surhires namespace and omits any repository link that names another organisation.
 
@@ -297,19 +312,19 @@ What to expect when you ask for the impossible:
 ## 6. Testing
 
 ```bash
-npm test          # 108 offline tests against mocked HTTP
+npm test          # every tests/*.test.ts except live, against mocked HTTP
 npm run typecheck
 SURHIRES_LIVE=1 npm run test:live   # 10 tests against the real site
 ```
 
 ### What is actually verified
 
-**Offline (108 tests, all passing).** Mocked at the `fetch` boundary with fixtures copied from live page structure.
+**Offline (all passing).** Mocked at the `fetch` boundary with fixtures copied from live page structure.
 
 - `extract.test.ts` — JSON-LD flattening, malformed-block tolerance, entity decoding, FAQ extraction, `AggregateOffer`/`Offer` parsing, breadcrumbs, table parsing, nav/footer/script exclusion, meta fallbacks.
 - `client.test.ts` — market prefixing (including sitemap exemptions and no double-prefixing), the robots `/api/` refusal, cache hits, request coalescing, TTL=0, 404 mapping, 500 retry-then-succeed, 429 with `Retry-After`, timeouts, network failures, sitemap merge with one file down, malformed sitemap entries, concurrency ceiling.
 - `validation.test.ts` — path normalisation, **refusal of other hosts including `app.surhires.com`**, traversal resolution, keyword matching, pagination edges, config defaults and rejections.
-- `tools.test.ts` — all 27 tools end to end through a real MCP client over an in-memory transport: registration, pagination, truncation, market override, every error path, and two guard tests asserting no request ever went to `/api/` and no fake ATS tool is advertised.
+- `tools.test.ts` — all 28 tools end to end through a real MCP client over an in-memory transport: registration, pagination, truncation, market override, every error path, and two guard tests asserting no request ever went to `/api/` and no fake ATS tool is advertised.
 
 **Live (10 tests, all passing on 2026-10-13).** Real GETs: sitemap size >100, pricing offers still present, feature page yields body + FAQs, comparison tables, `Organization` data, status pages still saying "not shipped", robots guard against the real origin, market currencies differing, deep search, blog dates.
 
@@ -323,9 +338,9 @@ One live test is a **tripwire**: if the status pages stop saying "planned / in d
 2. `npm run typecheck` — clean
 3. `npm test` — 108 passing
 4. `SURHIRES_LIVE=1 npm run test:live` — 10 passing (needs network)
-5. stdio smoke test above — 27 tools
+5. stdio smoke test above — 28 tools
 6. `npm run start:http` then `curl http://127.0.0.1:3000/health`
-7. Claude Desktop shows 27 tools; `get_server_diagnostics` reports reachable
+7. Claude Desktop shows 28 tools; `get_server_diagnostics` reports reachable
 
 ### Troubleshooting
 
@@ -436,3 +451,7 @@ What is unavailable today, and what would unblock it.
 Read-only GETs of public pages. No credentials held, no authenticated system touched, no CAPTCHA or access control bypassed, nothing written to Surhires. Requests are capped at 4 concurrent, cached for 15 minutes, retried with backoff, and sent with an identifying User-Agent carrying your contact address. `robots.txt` is honoured in code.
 
 Content belongs to Surhires / Soor LLC. This is the official Surhires MCP server for public website content. Treat vendor-authored comparison pages as marketing, and confirm anything commercially load-bearing with Surhires directly.
+
+## License and distribution
+
+MIT, see `LICENSE`. The package is `"private": true` and is **not published to npm** or to any MCP registry from this repository.

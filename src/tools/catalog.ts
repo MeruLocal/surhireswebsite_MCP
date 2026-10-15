@@ -135,7 +135,7 @@ export function registerCatalogTools(server: McpServer, ctx: ToolContext): void 
       asToolResult(async ({ slug, market, max_chars }) => {
         const path = await resolveSlug(ctx, `/${opts.section}`, slug);
         const page = await ctx.client.getPage(path, market);
-        return { slug, ...presentPage(page, { maxChars: max_chars }) };
+        return { slug, ...presentPage(page, { maxChars: max_chars, utm: { ctx, tool: opts.getName } }) };
       }),
     );
   };

@@ -150,7 +150,7 @@ export function registerContentTools(server: McpServer, ctx: ToolContext): void 
 
       return {
         slug,
-        ...presentPage(page, { maxChars: max_chars }),
+        ...presentPage(page, { maxChars: max_chars, utm: { ctx, tool: "get_blog_post" } }),
         headline: typeof posting?.headline === "string" ? posting.headline : page.heading,
         author: author?.name,
       };
@@ -275,7 +275,7 @@ export function registerContentTools(server: McpServer, ctx: ToolContext): void 
     },
     asToolResult(async ({ market, max_chars }) => {
       const page = await ctx.client.getPage("/changelog", market);
-      return presentPage(page, { maxChars: max_chars });
+      return presentPage(page, { maxChars: max_chars, utm: { ctx, tool: "get_changelog" } });
     }),
   );
 
@@ -302,7 +302,7 @@ export function registerContentTools(server: McpServer, ctx: ToolContext): void 
       return {
         pages: settled.map((result, i) =>
           result.status === "fulfilled"
-            ? presentPage(result.value, { maxChars: max_chars })
+            ? presentPage(result.value, { maxChars: max_chars, utm: { ctx, tool: "get_roadmap" } })
             : {
                 path: ctx.client.marketPath(wanted[i]!, market),
                 error: failureText(result.reason),
