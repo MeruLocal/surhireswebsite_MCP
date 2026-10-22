@@ -9,6 +9,7 @@ import { registerPricingTools } from "./tools/pricing.js";
 import { registerContentTools } from "./tools/content.js";
 import { registerCompanyTools } from "./tools/company.js";
 import { registerResourcesAndPrompts } from "./tools/resources.js";
+import { registerGuidanceTools } from "./tools/guidance.js";
 import type { ToolContext } from "./tools/shared.js";
 
 import { SERVER_VERSION, WEBSITE_URL } from "./version.js";
@@ -111,6 +112,7 @@ export function buildServer(options: BuildOptions = {}): {
   registerPricingTools(server, ctx);
   registerContentTools(server, ctx);
   registerCompanyTools(server, ctx);
+  registerGuidanceTools(server, ctx);
   registerResourcesAndPrompts(server, ctx);
 
   log.info("server built", {
