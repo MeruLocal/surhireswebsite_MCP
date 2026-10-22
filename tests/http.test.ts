@@ -88,6 +88,21 @@ describe("HTTP hardening (defaults)", () => {
     assert.equal(json.tool_count, payload.result.tools.length);
   });
 
+  test("serves a server card and llms.txt that match the manifest", async () => {
+    const card = (await (await fetch(`${srv.base}/.well-known/mcp/server-card.json`)).json()) as Record<string, any>;
+    assert.equal(card.transport.type, "streamable-http");
+    assert.match(card.transport.endpoint, /\/mcp$/);
+    assert.equal(card.authentication.required, false);
+    const manifest = (await (await fetch(`${srv.base}/.well-known/mcp.json`)).json()) as Record<string, any>;
+    assert.equal(card.tool_count, manifest.tool_count);
+    const res = await fetch(`${srv.base}/llms.txt`);
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get("content-type") ?? "", /text\/plain/);
+    const text = await res.text();
+    assert.match(text, /\/mcp \(Streamable HTTP/);
+    assert.match(text, /cannot search candidates/);
+  });
+
   test("/version advertises the endpoint and transport", async () => {
     const json = (await (await fetch(`${srv.base}/version`)).json()) as Record<string, string>;
     assert.equal(json.endpoint, "/mcp");
