@@ -37,7 +37,7 @@ export const STATUS_CLAIMS: { claim: string; verified_on: string; source_url?: s
     source_url: "https://surhires.com/robots.txt",
   },
   {
-    claim: "No authenticated MCP surface for tenant data was published; this server is the official Surhires MCP server for public website content.",
+    claim: "No authenticated MCP surface for tenant data was published; this server is the official Surhires MCP server for public website content only, and is not the planned account MCP server described at /mcp-server.",
     verified_on: STATUS_VERIFIED_ON,
     source_url: "https://surhires.com/mcp-server",
   },
@@ -154,7 +154,7 @@ export function registerCompanyTools(server: McpServer, ctx: ToolContext): void 
     {
       title: "Check whether Surhires offers an API, MCP server or Zapier app",
       description:
-        "Reads the pages where Surhires states the status of its programmatic surfaces -- /mcp-server, /whats-shipping and /integrations/zapier -- and returns their current published text plus FAQ entries. Call this before assuming any Surhires API exists: as of this server's last verification, Surhires published no REST API, API keys or developer docs for tenant data; this server is the official Surhires MCP server for public website content. Those dated findings are returned as `summary` claims with their verification date; where the live page text in `pages` says otherwise, the live text wins.",
+        "Reads the pages where Surhires states the status of its programmatic surfaces -- /mcp-server, /whats-shipping and /integrations/zapier -- and returns their current published text plus FAQ entries. Call this before assuming any Surhires API exists: as of this server's last verification, Surhires published no REST API, API keys or developer docs for tenant data; this server is the official Surhires MCP server for public website content only, not the planned account MCP server described at /mcp-server. Those dated findings are returned as `summary` claims with their verification date; where the live page text in `pages` says otherwise, the live text wins.",
       inputSchema: {
         market: marketArg,
         max_chars: maxCharsArg(ctx, 6_000),

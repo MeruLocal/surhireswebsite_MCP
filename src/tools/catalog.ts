@@ -184,7 +184,7 @@ export function registerCatalogTools(server: McpServer, ctx: ToolContext): void 
     {
       title: "List Surhires' free recruiter tools",
       description:
-        "Lists the free public calculators and generators Surhires hosts: boolean string generator, resume screener, placement fee and ROI calculators, time-to-fill calculator, pay transparency checker, job description analyzer, recruiter email templates. These are web pages, not APIs -- this tool returns their descriptions and paths so a person can open them.",
+        "Lists the free recruiter tools Surhires has pages for (the site names a boolean string generator, resume screener, placement fee and ROI calculators, time-to-fill calculator, pay transparency checker, job description analyzer and recruiter email templates). Several are marked In build on the site, so a page existing does not mean the tool works yet: read the page's own status before sending anyone to it. These are web pages, not APIs -- this tool returns their descriptions and paths.",
       inputSchema: {
         market: marketArg,
         detail: z.boolean().default(true).describe("Fetch each page in the returned window for its published description."),

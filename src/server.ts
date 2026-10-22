@@ -17,7 +17,7 @@ import { SERVER_VERSION, WEBSITE_URL } from "./version.js";
 export const SERVER_NAME = "surhires-mcp";
 export { SERVER_VERSION, WEBSITE_URL };
 
-const INSTRUCTIONS = `This is the official Surhires MCP server. It reads Surhires' public website (surhires.com) -- a recruitment ATS/CRM vendor.
+const INSTRUCTIONS = `This is the official Surhires MCP server. It reads Surhires' public website (surhires.com) -- a recruitment ATS/CRM vendor. It is the knowledge server for public website content only; the separate account MCP server that surhires.com describes (acting inside a customer's tenant) is not available yet.
 
 Scope, stated plainly so you do not over-promise to the user:
 
