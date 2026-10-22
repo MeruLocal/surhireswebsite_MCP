@@ -286,6 +286,55 @@ async function main(): Promise<void> {
         return;
       }
 
+      // Draft "server card" (MCP discovery proposal): where the endpoint is and what
+      // it is, readable without a protocol round trip. Same facts as mcp.json.
+      if (url.pathname === "/.well-known/mcp/server-card.json") {
+        const base = config.publicBaseUrl ?? "";
+        sendJson(
+          res,
+          200,
+          {
+            serverInfo: { name: SERVER_NAME, title: "Surhires MCP Server", version: SERVER_VERSION },
+            description:
+              "Read-only MCP server over the public Surhires website: pricing, features, integrations, comparisons, guides and templates, and a tool that maps recruiting questions to published pages. No credentials, no candidate or ATS data.",
+            websiteUrl: WEBSITE_URL,
+            transport: { type: "streamable-http", endpoint: `${base}/mcp` },
+            authentication: { required: false },
+            tool_count: toolNames.length,
+            documentation: `${base}/llms.txt`,
+          },
+          { "access-control-allow-origin": "*" },
+        );
+        return;
+      }
+
+      // Plain-text summary for AI crawlers and assistants that read llms.txt.
+      if (url.pathname === "/llms.txt" && req.method === "GET") {
+        const base = config.publicBaseUrl ?? `http://127.0.0.1:${config.port}`;
+        const body = [
+          "# Surhires MCP server",
+          "",
+          "> Read-only Model Context Protocol server over the public Surhires website (" + WEBSITE_URL + "). It answers questions about Surhires' pricing, features, integrations, comparisons, guides and templates from the live site, and points to the page to cite.",
+          "",
+          "Endpoint: " + base + "/mcp (Streamable HTTP, POST, no authentication, no API key).",
+          "Server card: " + base + "/.well-known/mcp/server-card.json",
+          "",
+          "Scope: published website pages only. It holds no credentials and cannot search candidates, post jobs, submit applications or read any pipeline. The account MCP server that surhires.com describes is not available yet.",
+          "",
+          "Good first calls: find_recruiting_guidance (a recruiting question in plain words), get_pricing, list_features, compare_with_competitor, get_integration_status.",
+          "",
+          "Tool results quote Surhires' own pages. Comparison pages are written by Surhires, not neutral reviews, and a page marked In build or Planned describes something that does not work yet.",
+          "",
+        ].join("\n");
+        res.writeHead(200, {
+          "content-type": "text/plain; charset=utf-8",
+          "content-length": Buffer.byteLength(body),
+          "access-control-allow-origin": "*",
+        });
+        res.end(body);
+        return;
+      }
+
       if (url.pathname !== "/mcp") {
         sendJson(res, 404, { error: "Not found. The MCP endpoint is POST /mcp." });
         return;
