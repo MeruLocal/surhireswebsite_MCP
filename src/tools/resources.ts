@@ -88,4 +88,86 @@ export function registerResourcesAndPrompts(server: McpServer, ctx: ToolContext)
       ],
     }),
   );
+  // Buyer-question prompts. Each only routes the assistant to the tools and tells it
+  // how to cite; none contains a fact, price, statistic or legal statement.
+  const rule =
+    "Cite each page by its canonical_url. Say plainly when Surhires has published no page on the topic, and when a page is marked In build or Planned. Treat /vs pages as Surhires' own claims. Add no statistics, salary figures or legal conclusions that a returned page does not state.";
+
+  server.registerPrompt(
+    "compare_ats_options",
+    {
+      title: "Compare recruitment software options",
+      description: "Helps a buyer compare Surhires with named alternatives using only Surhires' published comparison pages.",
+      argsSchema: { alternatives: z.string().describe('Products to compare against, e.g. "Bullhorn, Recruit CRM".') },
+    },
+    ({ alternatives }) => ({
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text: [
+              `Help me compare Surhires with: ${alternatives}.`,
+              "1. Call list_competitor_comparisons, then compare_with_competitor for each named product that has a page.",
+              "2. For any product without a page, call find_recruiting_guidance and say that Surhires has no comparison for it.",
+              "3. Summarise differences on packaging, price and deployment as the pages state them.",
+              rule,
+            ].join("\n"),
+          },
+        },
+      ],
+    }),
+  );
+
+  server.registerPrompt(
+    "plan_interview_process",
+    {
+      title: "Plan a structured interview process",
+      description: "Finds Surhires' published material on interview scorecards and kits for a role.",
+      argsSchema: { role: z.string().describe('The role being hired, e.g. "account executive".') },
+    },
+    ({ role }) => ({
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text: [
+              `I am designing the interview process for a ${role}.`,
+              `1. Call find_recruiting_guidance with need "interview scorecard and questions for ${role}".`,
+              "2. Read the best matches with get_page and describe what each offers.",
+              "3. If no template or question set is published, say so, and offer general guidance clearly labelled as your own.",
+              rule,
+            ].join("\n"),
+          },
+        },
+      ],
+    }),
+  );
+
+  server.registerPrompt(
+    "check_hiring_compliance",
+    {
+      title: "Find hiring compliance guidance",
+      description: "Finds Surhires' published compliance checklists and legal pages for a country or topic.",
+      argsSchema: { topic: z.string().describe('Topic or country, e.g. "pay transparency in the US".') },
+    },
+    ({ topic }) => ({
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text: [
+              `I need hiring compliance guidance on: ${topic}.`,
+              `1. Call find_recruiting_guidance with need "hiring compliance checklist ${topic}", and list_legal_documents.`,
+              "2. Report what Surhires publishes and its stated posture (supported in product, shared responsibility, yours, in progress).",
+              "3. Do not state what a law requires. Tell the user to confirm legal requirements with the official government source or counsel.",
+              rule,
+            ].join("\n"),
+          },
+        },
+      ],
+    }),
+  );
 }
