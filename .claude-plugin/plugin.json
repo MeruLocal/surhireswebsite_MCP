@@ -1,0 +1,9 @@
+{
+  "name": "surhires",
+  "description": "Read-only MCP access to public surhires.com website content: pages, features, integrations, pricing, comparisons and blog.",
+  "version": "0.1.0",
+  "homepage": "https://github.com/MeruLocal/surhireswebsite_MCP",
+  "repository": "https://github.com/MeruLocal/surhireswebsite_MCP",
+  "license": "MIT",
+  "keywords": ["mcp", "read-only", "website", "surhires"]
+}

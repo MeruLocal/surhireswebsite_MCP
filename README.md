@@ -402,3 +402,26 @@ What is unavailable today, and what would unblock it.
 Read-only GETs of public pages. No credentials held, no authenticated system touched, no CAPTCHA or access control bypassed, nothing written to Surhires. Requests are capped at 4 concurrent, cached for 15 minutes, retried with backoff, and sent with an identifying User-Agent carrying your contact address. `robots.txt` is honoured in code.
 
 Content belongs to Surhires / Soor LLC. This is an unofficial client, not affiliated with or endorsed by Surhires. Treat vendor-authored comparison pages as marketing, and confirm anything commercially load-bearing with Surhires directly.
+
+---
+
+## Use as a plugin
+
+This repo ships an Open Plugins component at [`.mcp.json`](./.mcp.json), so any
+MCP client that reads plugin repos can pick the server up directly. It points at
+the hosted, read-only endpoint:
+
+```json
+{
+  "mcpServers": {
+    "surhires": {
+      "type": "http",
+      "url": "https://mcp.surhires.com/mcp"
+    }
+  }
+}
+```
+
+No API key is required — the server holds no customer data and performs no write
+actions. To run it yourself instead, see the stdio and HTTP instructions above.
+

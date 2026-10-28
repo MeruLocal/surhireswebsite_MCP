@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "surhires": {
+      "type": "http",
+      "url": "https://mcp.surhires.com/mcp"
+    }
+  }
+}
