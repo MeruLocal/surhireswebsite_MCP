@@ -120,7 +120,7 @@ cp .env.example .env
 | `SURHIRES_MAX_RETRIES` | `2` | Retries on 429/5xx/network/timeout |
 | `SURHIRES_MAX_CONCURRENCY` | `4` | Parallel requests cap |
 | `SURHIRES_CACHE_TTL_MS` | `900000` | Page cache TTL (0 disables) |
-| `SURHIRES_CONTACT` | `unspecified` | Contact string in the User-Agent |
+| `SURHIRES_CONTACT` | `unspecified` | Contact string in the User-Agent. **Must be a Surhires address** (or left unset): it reaches every proxy and log viewer between this server and the origin |
 | `LOG_LEVEL` | `info` | `error` \| `warn` \| `info` \| `debug` (stderr only) |
 | `PORT` / `MCP_HTTP_HOST` | `3000` / `127.0.0.1` | HTTP transport only |
 
@@ -226,6 +226,18 @@ docker run --rm -p 8080:3000 \
 No credentials are passed in because none exist. The runtime needs outbound HTTPS to `surhires.com` and nothing else.
 
 Exposing it beyond localhost is your call and needs a reverse proxy terminating TLS and enforcing authentication. This server has no auth of its own — it holds no secrets and reads only public pages, but an open endpoint is still an open proxy for someone else's bandwidth.
+
+### Pre-launch checklist: brand isolation
+
+Surhires is a separate brand. Before the public host goes live, every surface a visitor or an agent can see must name Surhires only:
+
+- [ ] The TLS certificate covers Surhires names only (no shared SANs naming other domains).
+- [ ] The reverse proxy strips or neutralises `Server`, `Via` and `X-Powered-By`.
+- [ ] Proxy error pages (502/503/504) carry no other brand or host.
+- [ ] `SURHIRES_CONTACT` is a Surhires address, or left unset.
+- [ ] The brand guard passes on the shipped files: `FORBIDDEN_BRANDS="<list>" npm run check:brands`. Keep the list in a CI secret or variable, never in this repository.
+- [ ] The live audit passes with 0 FAIL on `C9.payloads`: `node audit-live-mcp.mjs https://<public host> --path /mcp --expect-host <public host> --forbid-brands "<list>"`.
+- [ ] Registry metadata (`server.json`, if added) uses a Surhires namespace and omits any repository link that names another organisation.
 
 ---
 
