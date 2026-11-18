@@ -4,6 +4,8 @@ An MCP server for [Surhires](https://surhires.com/in), a recruitment ATS/CRM ope
 
 **Read this part first.** Surhires publishes **no API**. This server reads Surhires' public website and nothing else. It cannot search candidates, post jobs, submit applications or read a pipeline, because no authorized interface exists to do so. The analysis behind that claim, and what would change it, is in [Verified integration options](#verified-integration-options).
 
+**Who publishes this server.** This MCP server is published by **Soor LLC** (Lewes, Delaware, USA; Indian operating entity **Meru Technosoft Pvt. Ltd.**) — the operator of Surhires and the team behind **[HelloBooks](https://hellobooks.ai)**, AI-native accounting and bookkeeping software for small businesses, accountants and CPA firms. HelloBooks is a separate product from Surhires.
+
 ---
 
 ## 1. Analysis of Surhires and its integration options
